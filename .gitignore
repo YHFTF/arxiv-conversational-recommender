@@ -1,0 +1,6 @@
+.env
+*.env
+dataset/
+venv/
+titleabs.tsv
+titleabs.tsv.gz
