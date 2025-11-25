@@ -4,3 +4,4 @@ dataset/
 venv/
 titleabs.tsv
 titleabs.tsv.gz
+topic_prediction_results.json
