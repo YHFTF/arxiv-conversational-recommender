@@ -12,18 +12,48 @@ OGBN-Arxiv 데이터셋을 기반으로 하며, 단순히 논문의 ID만 학습
 
 > **참고:** 다운로드한 파일들은 프로젝트의 `dataset/` 또는 `subdataset/` 폴더 경로에 위치시켜야 코드가 정상적으로 작동합니다.
 
-## 🚀 주요 기능 (Key Features)
+## 💻 상세 코드 설명 (Code Descriptions)
 
-1.  **그래프 샘플링 (Forest Fire Sampling):**
-      * 거대 그래프 데이터(169k 노드)를 학습 효율성을 위해 위상적 특성을 유지하며 1.6만 개(16k)로 경량화했습니다.
-2.  **LLM 기반 특성 추출 (Feature Extraction):**
-      * GPT-4o-mini를 활용하여 논문의 제목과 초록에서 **'Domain, Task, Method'** 관점의 핵심 키워드 5개를 추출합니다.
-      * 비동기(Asyncio) 처리를 통해 대용량 데이터를 고속으로 처리합니다.
-3.  **저자 데이터 매핑 (User Profiling):**
-      * OpenAlex API를 사용하여 논문의 실제 저자 정보를 수집하고, 이를 추천 시스템의 '유저(User)'로 정의하여 Cold-Start 문제를 해결했습니다.
-4.  **Content-Aware Matrix Factorization:**
-      * `User ID` + `Item ID` + \*\*`Keyword Embeddings`\*\*를 결합한 하이브리드 모델을 구현했습니다.
-      * 단순히 같이 본 논문이 아니라, **내용이 유사한 논문**을 추천하여 추천의 설득력(Explainability)을 높였습니다.
+이 프로젝트는 크게 데이터 수집, 데이터 분석(LLM 활용), 그리고 추천 모델 프로토타이핑의 3단계로 구성되어 있습니다.
+
+### 1. Data Collection (`code/data_collection/`)
+거대 그래프 데이터를 다루기 쉬운 크기로 줄이고, 추천 시스템을 위한 '유저' 개념을 생성하는 단계입니다.
+
+* **`forest_fire.py`**
+    * **기능:** 16.9만 개의 노드를 가진 OGBN-Arxiv 그래프를 Forest Fire Sampling 기법을 사용하여 1.6만 개(약 10%)로 다운샘플링합니다.
+    * **특징:** 원본 그래프의 위상적 특성(Topological Structure)을 최대한 유지하며 `ogbn_arxiv_16k_ffs_sample.pt` 파일을 생성합니다.
+* **`author_mapper.py`**
+    * **기능:** OpenAlex API를 활용하여, 샘플링된 논문의 실제 저자(Author) 정보를 수집합니다.
+    * **특징:** MAG ID 기반으로 매핑하며, 수집된 저자 데이터는 추후 Cold-Start 문제를 해결하기 위한 유저 프로필로 사용됩니다.
+* **`user_gen(TF-IDF).py`**
+    * **기능:** 저자 이름과 논문 텍스트(TF-IDF 상위 키워드)를 결합하여 추천 시스템의 학습 데이터인 '유저-아이템 상호작용(Interaction)'을 생성합니다.
+    * **특징:** 저자가 작성한 논문의 키워드 히스토리를 분석하여 유저의 관심사 프로필을 구축합니다.
+* **`loader.py`**
+    * **기능:** OGBN-Arxiv 데이터셋을 안전하게 로드하기 위한 유틸리티 스크립트입니다 (PyTorch 보안 패치 포함).
+
+### 2. Data Analysis & LLM (`code/data_analysis/`)
+단순한 텍스트 매칭을 넘어, LLM을 통해 논문의 문맥을 이해하고 분류하는 핵심 단계입니다.
+
+* **`llm_keyword_extraction.py`**
+    * **기능:** GPT-4o-mini를 사용하여 각 논문의 제목과 초록에서 핵심 키워드(Feature) 5개를 추출합니다.
+    * **특징:** `asyncio`를 활용한 비동기 처리로 대량의 데이터를 빠르게 처리하며, 중간 저장 및 에러 핸들링 로직이 포함되어 있습니다.
+* **`llm_pred_label.py`**
+    * **기능:** LLM이 논문의 제목/초록뿐만 아니라 **'인용된 이웃 논문들의 카테고리 분포(Graph Context)'**를 참고하여 논문의 카테고리를 예측합니다.
+    * **특징:** 단순 분류를 넘어 그래프 정보를 프롬프트에 주입(Context Injection)했을 때의 정확도 향상을 실험합니다.
+* **`cost_measure.py`**
+    * **기능:** 전체 데이터를 처리하기 전, 샘플 데이터를 통해 LLM API의 예상 비용(토큰 사용량)을 산출합니다.
+* **`lable_check.py` / `num_lable.py`**
+    * **기능:** 데이터셋의 레이블 분포를 확인하고 매핑 정보를 검증하는 데이터 무결성 검사 도구입니다.
+
+### 3. Prototype & Modeling (`code/prototype/`)
+구축된 데이터를 바탕으로 실제 추천 알고리즘을 수행하고 평가합니다.
+
+* **`data1(llm).py` (메인 모델)**
+    * **기능:** **Content-Aware Matrix Factorization** 모델을 구현하여 논문을 추천합니다.
+    * **구조:** `User Embedding` + `Item Embedding` + **`LLM Keyword Embedding`**을 결합한 하이브리드 구조입니다.
+    * **실행:** 모델 학습 후, 인터랙티브 모드로 진입하여 랜덤한 유저를 선택하고 실제 추천 결과를 실시간으로 확인할 수 있습니다.
+* **`data1(TF-IDF).py` (베이스라인)**
+    * **기능:** LLM 대신 TF-IDF로 추출한 키워드를 사용하는 베이스라인 모델입니다. LLM 기반 모델과의 성능 비교를 위해 사용됩니다.
 
 ## 📁 프로젝트 구조 (Directory Structure)
 
