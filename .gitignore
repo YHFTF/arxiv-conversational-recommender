@@ -1,7 +1,7 @@
 .env
 *.env
 dataset/
+output/
+subdataset/
 venv/
-titleabs.tsv
-titleabs.tsv.gz
 topic_prediction_results.json
