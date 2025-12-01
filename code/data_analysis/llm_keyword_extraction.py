@@ -15,12 +15,15 @@ API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY: sys.exit("오류: API 키 없음")
 client = AsyncOpenAI(api_key=API_KEY)
 
-# --- 설정 ---
+# --- 기본 설정 ---
 TEST_MODE = False        
 TEST_SIZE = 5           
 OVERWRITE = False        
-MAX_CONCURRENT_REQUESTS = 5   # Tier 1 최적화 (5개)
 SAVE_INTERVAL = 50       
+
+# [변경] 전역 설정 변수 (실행 시 사용자 입력에 의해 결정됨)
+MAX_CONCURRENT_REQUESTS = 1
+DELAY_BEFORE_REQUEST = 0.0
 
 # 경로 설정
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -87,7 +90,7 @@ if TEST_MODE: work_items = work_items[:TEST_SIZE]
 print(f"처리할 작업: {len(work_items)}개")
 
 
-# --- 3. Async LLM Processor (수다쟁이 모드) ---
+# --- 3. Async LLM Processor ---
 
 async def process_single_item(sem, item):
     async with sem:
@@ -97,16 +100,18 @@ async def process_single_item(sem, item):
         system_prompt = "You are an expert Research Analyst. Extract core keywords."
         user_prompt = f"""
         Extract exactly **5 most critical keywords**. No reasoning. Output ONLY JSON.
-        Paper Content: \"\"\"{text[:2000]}\"\"\"
+        Paper Content: \"\"\"{text[:1500]}\"\"\"
         Output Format: {{ "features": ["kw1", "kw2", "kw3", "kw4", "kw5"] }}
         """
 
-        max_retries = 10 # 재시도 횟수 늘림 (Tier 1은 오래 버텨야 함)
+        max_retries = 20 
         retry_count = 0
         
         while retry_count < max_retries:
             try:
-                await asyncio.sleep(0.2)
+                # [설정 적용] 요청 전 대기 (Tier 1일 때만 작동)
+                if DELAY_BEFORE_REQUEST > 0:
+                    await asyncio.sleep(DELAY_BEFORE_REQUEST)
                 
                 response = await client.chat.completions.create(
                     model="gpt-4o-mini",
@@ -118,24 +123,13 @@ async def process_single_item(sem, item):
                 content = response.choices[0].message.content
                 parsed = json.loads(content)
                 
-                # 성공 시 1초 대기 (Rate Limit 예방)
-                await asyncio.sleep(1.0)
-                
                 return {"node_idx": node_idx, "features": parsed.get("features", []), "status": "success"}
             
             except RateLimitError:
-                # [수정됨] 멈추면 로그를 출력합니다!
-                wait_time = 10 + (retry_count * 5) # 10초, 15초, 20초...
-                tqdm.write(f"[일시정지] Node {node_idx}: 429 Rate Limit 발생! {wait_time}초간 대기합니다... (재시도 {retry_count+1}/{max_retries})")
-                
-                # 대기하는 동안 5초마다 생존 신고
-                for i in range(wait_time, 0, -5):
-                    if i > 5: # 너무 자주 뜨면 지저분하니까 5초 이상 남았을 때만
-                        await asyncio.sleep(5)
-                        # tqdm.write(f"   ...Node {node_idx} 대기 중 ({i-5}초 남음)")
-                    else:
-                        await asyncio.sleep(i)
-
+                # [설정 적용] 429 에러 시 대기 시간
+                wait_time = 3 if DELAY_BEFORE_REQUEST > 0 else (5 + retry_count * 2)
+                tqdm.write(f"[일시정지] Node {node_idx}: 429 발생! {wait_time}초 대기...")
+                await asyncio.sleep(wait_time)
                 retry_count += 1
                 
             except Exception as e:
@@ -152,10 +146,11 @@ async def main():
         print("작업 완료!")
         return
 
+    # [설정 적용] 동시 요청 수 제한
     sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
     tasks = [process_single_item(sem, item) for item in work_items]
     
-    print(f"로그 출력 모드 시작 (동시 {MAX_CONCURRENT_REQUESTS}개)...")
+    print(f"▶ 실행 모드: 동시 {MAX_CONCURRENT_REQUESTS}개 요청 / 요청 간 대기 {DELAY_BEFORE_REQUEST}초")
     
     batch_results = []
     
@@ -191,7 +186,29 @@ def save_checkpoint():
             json.dump(results_cache, f, ensure_ascii=False, indent=4)
     except: pass
 
+# --- 실행 진입점 (모드 선택) ---
 if __name__ == "__main__":
+    print("="*60)
+    print(" [ OpenAI Tier 설정 ]")
+    print(" 1. Tier 1 (안전 모드): 속도 하")
+    print(" 2. Tier 2 (고속 모드): 속도 최상")
+    print("="*60)
+    
+    while True:
+        choice = input(">> 모드를 선택하세요 (1, 2, 3): ").strip()
+        if choice == '1':
+            MAX_CONCURRENT_REQUESTS = 1     # 한번에 1개
+            DELAY_BEFORE_REQUEST = 1.5      # 1.5초 대기
+            print("\nTier 1 (안전 모드)")
+            break
+        elif choice == '2':
+            MAX_CONCURRENT_REQUESTS = 50    # 한번에 50개
+            DELAY_BEFORE_REQUEST = 0.0      # 대기 없음
+            print("\nTier 2 (고속 모드)")
+            break
+        else:
+            print("잘못된 입력입니다. 1, 2, 3 중 하나를 입력해주세요.")
+
     try: asyncio.run(main())
     except KeyboardInterrupt:
         print("\n중단! 저장 중...")
