@@ -16,7 +16,7 @@ if not API_KEY: sys.exit("오류: API 키 없음")
 client = AsyncOpenAI(api_key=API_KEY)
 
 # --- 기본 설정 ---
-TEST_MODE = False        
+TEST_MODE = False      
 TEST_SIZE = 5           
 OVERWRITE = False        
 SAVE_INTERVAL = 50       
@@ -97,44 +97,72 @@ async def process_single_item(sem, item):
         node_idx = item['idx']
         text = item['text']
         
-        system_prompt = "You are an expert Research Analyst. Extract core keywords."
+        # [수정] 시스템 프롬프트: 분류 기준 명시
+        system_prompt = "You are an expert Research Analyst. Extract the core technical concepts from the paper's content, strictly classifying them into Domain, Task, and Method."
+        
+        # [수정] 사용자 프롬프트: JSON 구조 및 키워드 배분 가이드 명시
         user_prompt = f"""
-        Extract exactly **5 most critical keywords**. No reasoning. Output ONLY JSON.
-        Paper Content: \"\"\"{text[:1500]}\"\"\"
-        Output Format: {{ "features": ["kw1", "kw2", "kw3", "kw4", "kw5"] }}
-        """
+        Extract a total of **5 to 7 most critical keywords** and classify them into the following three categories. Do not invent new keywords.
+        - **Domain (1-2 KWs)**: The main research field (e.g., Computer Vision, NLP, Distributed Systems).
+        - **Task (2-3 KWs)**: The specific problem being solved (e.g., Image Segmentation, Dialogue Generation, Phase Retrieval).
+        - **Method (2 KWs)**: The core technique or architecture used (e.g., Transformer, GAN, Reinforcement Learning).
 
-        max_retries = 20 
+        Output ONLY JSON. No reasoning.
+        Paper Content: \"\"\"{text[:2000]}\"\"\"
+        Output Format: {{ 
+            "domain": ["kw_dom1", "kw_dom2"], 
+            "task": ["kw_task1", "kw_task2"], 
+            "method": ["kw_method1", "kw_method2"]
+        }}
+        """
+        
+        max_retries = 10 
         retry_count = 0
         
         while retry_count < max_retries:
             try:
-                # [설정 적용] 요청 전 대기 (Tier 1일 때만 작동)
-                if DELAY_BEFORE_REQUEST > 0:
-                    await asyncio.sleep(DELAY_BEFORE_REQUEST)
+                await asyncio.sleep(0.2)
                 
                 response = await client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                     response_format={"type": "json_object"},
-                    temperature=0.2, max_tokens=100
+                    temperature=0.2, max_tokens=150 # 키워드 수가 늘었으므로 max_tokens를 150으로 증가
                 )
                 
                 content = response.choices[0].message.content
                 parsed = json.loads(content)
                 
-                return {"node_idx": node_idx, "features": parsed.get("features", []), "status": "success"}
+                await asyncio.sleep(1.0)
+                
+                # [수정] 결과 딕셔너리에 'features' 대신 'domain', 'task', 'method'를 포함
+                return {
+                    "node_idx": node_idx, 
+                    "domain": parsed.get("domain", []), 
+                    "task": parsed.get("task", []), 
+                    "method": parsed.get("method", []), 
+                    "status": "success"
+                }
             
-            except RateLimitError:
-                # [설정 적용] 429 에러 시 대기 시간
-                wait_time = 3 if DELAY_BEFORE_REQUEST > 0 else (5 + retry_count * 2)
+            except RateLimitError as e:  # [수정] 'as e'를 추가하여 에러 객체를 잡습니다.
+                # 1. 429 에러의 구체적인 원인(메시지)을 추출하여 출력합니다.
+                #    (이 메시지를 보면 RPM 초과인지, 하루 할당량(RPD) 초과인지 알 수 있습니다)
+                error_detail = e.body.get('message', str(e)) if hasattr(e, 'body') and e.body else str(e)
+                tqdm.write(f"\n[429 상세 원인] Node {node_idx}: {error_detail}")
+
+                # 2. 대기 시간 설정 (보내주신 로직 유지)
+                #    (주의: DELAY_BEFORE_REQUEST 변수가 코드 상단에 정의되어 있어야 에러가 안 납니다)
+                wait_time = 3 if 'DELAY_BEFORE_REQUEST' in globals() and DELAY_BEFORE_REQUEST > 0 else (5 + retry_count * 2)
+                
                 tqdm.write(f"[일시정지] Node {node_idx}: 429 발생! {wait_time}초 대기...")
                 await asyncio.sleep(wait_time)
                 retry_count += 1
                 
             except Exception as e:
                 tqdm.write(f"[오류] Node {node_idx}: {e}")
-                if "insufficient_quota" in str(e): return {"node_idx": node_idx, "status": "fatal"}
+                # 쿼터 부족(돈 없음/일일한도)은 치명적 오류로 처리
+                if "insufficient_quota" in str(e): 
+                    return {"node_idx": node_idx, "status": "fatal"}
                 await asyncio.sleep(2)
                 retry_count += 1
 
@@ -195,9 +223,9 @@ if __name__ == "__main__":
     print("="*60)
     
     while True:
-        choice = input(">> 모드를 선택하세요 (1, 2, 3): ").strip()
+        choice = input(">> 모드를 선택하세요 (1, 2): ").strip()
         if choice == '1':
-            MAX_CONCURRENT_REQUESTS = 1     # 한번에 1개
+            MAX_CONCURRENT_REQUESTS = 3     # 한번에 3개
             DELAY_BEFORE_REQUEST = 1.5      # 1.5초 대기
             print("\nTier 1 (안전 모드)")
             break
@@ -207,7 +235,7 @@ if __name__ == "__main__":
             print("\nTier 2 (고속 모드)")
             break
         else:
-            print("잘못된 입력입니다. 1, 2, 3 중 하나를 입력해주세요.")
+            print("잘못된 입력입니다. 1, 2 중 하나를 입력해주세요.")
 
     try: asyncio.run(main())
     except KeyboardInterrupt:
