@@ -23,18 +23,23 @@ USER_PROFILE_FILE = os.path.join(project_root, 'output', 'final_user_profiles.js
 AUTHOR_DATA_FILE = os.path.join(project_root, 'output', 'author_data_openalex.json')
 if not os.path.exists(AUTHOR_DATA_FILE):
     AUTHOR_DATA_FILE = os.path.join(project_root, 'output', 'author_data.json')
+MODEL_SAVE_PATH = os.path.join(project_root, 'output', 'content_aware_net_v2.pth')
 
-# 하이퍼파라미터
-EMBEDDING_DIM = 64     # 64 유지
-BATCH_SIZE = 64        # 64 유지
-LEARNING_RATE = 0.005  # 0.05 -> 0.005 (MLP 학습을 위한 안전한 값으로 변경)
-EPOCHS = 10
+# 하이퍼파라미터 (규제 및 안정화 설정)
+EMBEDDING_DIM = 64
+BATCH_SIZE = 64
+LEARNING_RATE = 0.005  # MLP 구조를 위해 낮춤 (0.05 -> 0.005)
+EPOCHS = 15            # 과적합 방지를 위해 15회로 제한
+WEIGHT_DECAY = 1e-4    # L2 정규화 도입 (과적합 방지)
 TOP_K = 5
+# 키워드 가중치 설정 (Domain에 2배 가중치 부여)
+WEIGHT_DOMAIN = 2
+WEIGHT_TASK_METHOD = 1 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[System] Device: {device}")
 
-# --- 2. 데이터 로드 및 전처리 ---
+# --- 2. 데이터 로드 및 전처리 (수정됨: 구조화된 키워드 로드) ---
 print("[System] Loading data...")
 
 if not os.path.exists(LLM_RESULT_FILE): sys.exit("[Error] LLM result file not found.")
@@ -43,20 +48,31 @@ if not os.path.exists(LLM_RESULT_FILE): sys.exit("[Error] LLM result file not fo
 with open(LLM_RESULT_FILE, 'r', encoding='utf-8') as f:
     llm_data = json.load(f)
 
-node_to_keywords = {}
+node_to_structured_keywords = {} # 구조화된 키워드를 저장
 all_keywords = []
 for item in llm_data:
     node_idx = item['node_idx']
-    kws = [k.strip().lower() for k in item.get('features', [])]
-    node_to_keywords[node_idx] = kws
-    all_keywords.extend(kws)
+    # 'domain', 'task', 'method' 필드를 모두 가져와 소문자로 변환 및 공백 제거
+    domain_kws = [k.strip().lower() for k in item.get('domain', [])]
+    task_kws = [k.strip().lower() for k in item.get('task', [])]
+    method_kws = [k.strip().lower() for k in item.get('method', [])]
+    
+    node_to_structured_keywords[node_idx] = {
+        'domain': domain_kws,
+        'task': task_kws,
+        'method': method_kws
+    }
+    
+    all_keywords.extend(domain_kws)
+    all_keywords.extend(task_kws)
+    all_keywords.extend(method_kws)
 
 keyword_counts = Counter(all_keywords)
 unique_keywords = sorted(keyword_counts.keys())
 keyword_to_id = {kw: i+1 for i, kw in enumerate(unique_keywords)}
 NUM_KEYWORDS = len(keyword_to_id) + 1
 
-# 2. 유저 프로필 로드
+# 2. 유저 프로필 로드 (기존과 동일)
 try:
     with open(USER_PROFILE_FILE, 'r', encoding='utf-8') as f:
         user_profiles = json.load(f)
@@ -65,7 +81,7 @@ except:
     user_id_to_name = {}
     print("[Warning] Failed to load user profiles.")
 
-# 3. 논문 저자 정보 로드
+# 3. 논문 저자 정보 로드 (기존과 동일)
 try:
     with open(AUTHOR_DATA_FILE, 'r', encoding='utf-8') as f:
         author_raw = json.load(f)
@@ -74,9 +90,9 @@ except:
     node_to_authors = {}
     print("[Warning] Failed to load author data.")
 
-# 4. 데이터 필터링 및 ID 재매핑
+# 4. 데이터 필터링 및 ID 재매핑 (기존과 동일)
 df_full = pd.read_csv(INTERACTION_FILE)
-valid_nodes = set(node_to_keywords.keys())
+valid_nodes = set(node_to_structured_keywords.keys()) # 키워드 딕셔너리 변경 반영
 df = df_full[df_full['item_id'].isin(valid_nodes)].copy()
 
 if len(df) < 10: sys.exit("[Error] Not enough data.")
@@ -92,15 +108,33 @@ reverse_item_map = {new: original for new, original in enumerate(item_ids)}
 df['user_id_new'] = df['user_id'].map(user_id_map)
 df['item_id_new'] = df['item_id'].map(item_id_map)
 
-# 아이템별 키워드 인덱스 준비
+# 아이템별 키워드 인덱스 준비 (수정됨: 가중치 적용)
 item_keyword_indices = {}
 for new_id, original_id in reverse_item_map.items():
-    kws = node_to_keywords.get(original_id, [])
-    kw_ids = [keyword_to_id[k] for k in kws if k in keyword_to_id]
+    structured_kws = node_to_structured_keywords.get(original_id, {'domain': [], 'task': [], 'method': []})
+    
+    kw_ids = []
+    
+    # 1. Domain (2배 가중치)
+    for kw in structured_kws['domain']:
+        if kw in keyword_to_id:
+            kw_id = keyword_to_id[kw]
+            kw_ids.extend([kw_id] * WEIGHT_DOMAIN) # 2번 반복
+
+    # 2. Task (1배 가중치)
+    for kw in structured_kws['task']:
+        if kw in keyword_to_id:
+            kw_ids.extend([keyword_to_id[kw]] * WEIGHT_TASK_METHOD) # 1번 반복
+
+    # 3. Method (1배 가중치)
+    for kw in structured_kws['method']:
+        if kw in keyword_to_id:
+            kw_ids.extend([keyword_to_id[kw]] * WEIGHT_TASK_METHOD) # 1번 반복
+
     if not kw_ids: kw_ids = [0]
     item_keyword_indices[new_id] = kw_ids
 
-# 제목 로드
+# 제목 로드 (기존과 동일)
 try:
     df_titles = pd.read_csv(TITLE_FILE, sep='\t', header=None, usecols=[0, 1],
                             names=['paper_id', 'title'], dtype={'paper_id': str})
@@ -109,8 +143,7 @@ except: paper_title_map = {}
 
 print(f"[System] Data prepared: {len(df)} interactions (Users: {len(user_ids)}, Papers: {len(item_ids)})")
 
-# --- 3. 모델 정의 ---
-# --- 3. 모델 정의 ---
+# --- 3. 모델 정의 (수정됨: MLP 기반 ContentAwareNet) ---
 class ContentAwareNet(nn.Module):
     def __init__(self, num_users, num_items, num_keywords, embedding_dim):
         super(ContentAwareNet, self).__init__()
@@ -123,11 +156,11 @@ class ContentAwareNet(nn.Module):
         # 입력 차원: User(64) + Keyword(64) = 128
         self.fc1 = nn.Linear(embedding_dim * 2, 128) 
         self.fc2 = nn.Linear(128, 64)
-        self.output = nn.Linear(64, 1) # 최종 점수 하나 출력
+        self.output = nn.Linear(64, 1) 
         
         # 활성화 함수 및 드롭아웃 (과적합 방지)
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.2) 
+        self.dropout = nn.Dropout(0.3) 
         
         # 초기화
         nn.init.xavier_uniform_(self.user_emb.weight)
@@ -155,8 +188,8 @@ class ContentAwareNet(nn.Module):
         # 최종 예측 (Logits)
         logits = self.output(x)
         return logits.squeeze()
-    
-# --- 4. 데이터셋 ---
+
+# --- 4. 데이터셋 (기존과 동일) ---
 class HybridDataset(Dataset):
     def __init__(self, user_ids, item_ids, item_kw_map, num_items, neg_ratio=4):
         self.users = user_ids
@@ -191,12 +224,14 @@ def collate_fn(batch):
     keywords_padded = pad_sequence(keywords, batch_first=True, padding_value=0)
     return (torch.tensor(users), torch.tensor(items), keywords_padded, torch.tensor(labels))
 
-# --- 5. 학습 ---
+# --- 5. 학습 및 모드 선택 (수정됨: ContentAwareNet 사용 및 규제 추가) ---
 dataset = HybridDataset(df['user_id_new'].values, df['item_id_new'].values, item_keyword_indices, len(item_id_map))
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
 
+# [수정] ContentAwareNet으로 모델 클래스 변경
 model = ContentAwareNet(len(user_id_map), len(item_id_map), NUM_KEYWORDS, EMBEDDING_DIM).to(device)
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+# [수정] weight_decay 추가
+optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 criterion = nn.BCEWithLogitsLoss()
 
 print("\n" + "="*50)
@@ -206,8 +241,6 @@ print("   2. 저장된 모델 불러오기 (Load Pre-trained Model)")
 print("="*50)
 
 mode = input(">> 번호를 입력하세요 (1 or 2): ").strip()
-
-MODEL_SAVE_PATH = os.path.join(project_root, 'output', 'content_aware_mf_model.pth')
 
 if mode == '1':
     # --- [Mode 1] 새로 학습 ---
@@ -224,10 +257,11 @@ if mode == '1':
             optimizer.step()
             total_loss += loss.item()
         
-        if (epoch+1) % 5 == 0: 
+        # Loss가 안정화된 후 (10회)부터 5회마다 출력
+        if (epoch+1) % 5 == 0 or epoch == 0: 
             print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {total_loss/len(dataloader):.4f}")
     
-    # [추가] 학습 완료 후 모델 저장
+    # 학습 완료 후 모델 저장
     print(f"[System] Saving model to {MODEL_SAVE_PATH}...")
     torch.save(model.state_dict(), MODEL_SAVE_PATH)
     print("[System] Model saved successfully.")
@@ -237,7 +271,6 @@ elif mode == '2':
     if os.path.exists(MODEL_SAVE_PATH):
         print(f"\n[System] Loading model from {MODEL_SAVE_PATH}...")
         try:
-            # map_location은 CPU/GPU 환경에 맞춰 로드하도록 돕습니다.
             model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=device))
             print("[System] Model loaded successfully.")
         except Exception as e:
@@ -253,7 +286,7 @@ else:
     print("[Error] 잘못된 입력입니다. 프로그램을 종료합니다.")
     sys.exit()
 
-# --- 6. 인터랙티브 랜덤 테스트 모드 ---
+# --- 6. 인터랙티브 랜덤 테스트 모드 (기존과 동일) ---
 print("\n[System] Training complete.")
 print("[System] Press 'Enter' to test a random user.")
 print("[System] Press 'Ctrl+C' to exit.")
@@ -277,7 +310,7 @@ try:
         input("\n>>> Press Enter to pick a random user... ")
 
         # 랜덤 유저 선택
-        target_u_new = random.choice(candidates)
+        target_u_new = random.choice(candidates) # <--- 이 라인이 while 루프 안에 들여쓰기 되어 있어야 함
         target_u_original = reverse_user_map[target_u_new]
         target_u_name = user_id_to_name.get(target_u_original, f"Unknown User {target_u_original}")
 
@@ -290,9 +323,17 @@ try:
             preds = torch.sigmoid(model(all_user_tensor, all_items_new, all_kws_tensor)).cpu().numpy()
 
         preds[real_items_new] = -1 
-        top_indices = np.argsort(preds)[::-1][:TOP_K]
+        
+        # [수정된 부분]
+        # Top 5 추천 논문 인덱스 (높은 점수 순)
+        top_indices = np.argsort(preds)[::-1][:TOP_K] 
+        
+        # Bottom 5 비추천 논문 인덱스 (낮은 점수 순, -1 제외)
+        # 이미 본 논문은 -1로 설정했으므로, 오름차순 정렬 시 -1을 건너뛴 다음 5개를 선택합니다.
+        num_items_in_history = len(real_items_new)
+        bottom_indices = np.argsort(preds)[num_items_in_history : num_items_in_history + TOP_K]
 
-        # 결과 출력
+        # 결과 출력 (상단부)
         print("------------------------------------------------------------")
         print(f"[Target User] {target_u_name} (ID: {target_u_original})")
         
@@ -300,17 +341,22 @@ try:
         user_keywords_pool = []
         for i_new in real_items_new:
             oid = reverse_item_map[i_new]
-            kws = node_to_keywords.get(oid, [])
+            # 구조화된 키워드 출력 (새로운 딕셔너리 사용)
+            kws_dict = node_to_structured_keywords.get(oid, {'domain': [], 'task': [], 'method': []})
+            kws = kws_dict['domain'] + kws_dict['task'] + kws_dict['method']
             user_keywords_pool.extend(kws)
-            print(f"  - {kws}")
+            print(f"  - Domain: {kws_dict['domain']}, Task: {kws_dict['task']}, Method: {kws_dict['method']}")
 
-        print(f"\n[Recommendations Top {TOP_K}]")
+
+        # --- Top 5 추천 논문 출력 ---
+        print(f"\n[TOP {TOP_K} 추천 논문 (높은 점수)]")
         print("------------------------------------------------------------")
         for rank, i_new in enumerate(top_indices, 1):
             oid = reverse_item_map[i_new]
-            kws = node_to_keywords.get(oid, [])
+            kws_dict = node_to_structured_keywords.get(oid, {'domain': [], 'task': [], 'method': []})
             
-            # 저자 정보
+            # ... (이하 논문 정보 출력 로직은 기존과 동일) ...
+            kws = kws_dict['domain'] + kws_dict['task'] + kws_dict['method']
             authors = node_to_authors.get(oid, ["Unknown Authors"])
             authors_str = ", ".join(authors[:3]) + ("..." if len(authors) > 3 else "")
 
@@ -325,7 +371,39 @@ try:
             print(f"[{rank}] Score: {score:.1%}")
             print(f"Title:   {title}")
             print(f"Authors: {authors_str}")
-            print(f"Keywords:{kws}")
+            print(f"Domain:  {kws_dict['domain']}")
+            print(f"Task:    {kws_dict['task']}")
+            print(f"Method:  {kws_dict['method']}")
+            if overlap: print(f"Matches: {list(overlap)}")
+            print("------------------------------------------------------------")
+
+
+        # --- Bottom 5 비추천 논문 출력 (새로 추가) ---
+        print(f"\n[BOTTOM {TOP_K} 비추천 논문 (낮은 점수)]")
+        print("------------------------------------------------------------")
+        for rank, i_new in enumerate(bottom_indices, 1):
+            oid = reverse_item_map[i_new]
+            kws_dict = node_to_structured_keywords.get(oid, {'domain': [], 'task': [], 'method': []})
+            
+            # ... (이하 논문 정보 출력 로직은 기존과 동일) ...
+            kws = kws_dict['domain'] + kws_dict['task'] + kws_dict['method']
+            authors = node_to_authors.get(oid, ["Unknown Authors"])
+            authors_str = ", ".join(authors[:3]) + ("..." if len(authors) > 3 else "")
+
+            try:
+                pid = df_full[df_full['item_id'] == oid].iloc[0]['paper_id']
+                title = paper_title_map.get(str(pid), "Title Not Found")
+            except: title = "Unknown"
+            
+            score = preds[i_new]
+            overlap = set(kws) & set(user_keywords_pool)
+            
+            print(f"[{rank}] Score: {score:.1%}")
+            print(f"Title:   {title}")
+            print(f"Authors: {authors_str}")
+            print(f"Domain:  {kws_dict['domain']}")
+            print(f"Task:    {kws_dict['task']}")
+            print(f"Method:  {kws_dict['method']}")
             if overlap: print(f"Matches: {list(overlap)}")
             print("------------------------------------------------------------")
 
