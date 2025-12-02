@@ -170,18 +170,59 @@ model = ContentAwareMF(len(user_id_map), len(item_id_map), NUM_KEYWORDS, EMBEDDI
 optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 criterion = nn.BCEWithLogitsLoss()
 
-print(f"\n[Training] Started (Epochs: {EPOCHS})")
-model.train()
-for epoch in range(EPOCHS):
-    total_loss = 0
-    for u, i, k, l in dataloader:
-        u, i, k, l = u.to(device), i.to(device), k.to(device), l.to(device)
-        optimizer.zero_grad()
-        loss = criterion(model(u, i, k), l.float())
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
-    if (epoch+1) % 5 == 0: print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {total_loss/len(dataloader):.4f}")
+print("\n" + "="*50)
+print("   [실행 모드 선택]")
+print("   1. 모델 새로 학습하기 (Train New Model)")
+print("   2. 저장된 모델 불러오기 (Load Pre-trained Model)")
+print("="*50)
+
+mode = input(">> 번호를 입력하세요 (1 or 2): ").strip()
+
+MODEL_SAVE_PATH = os.path.join(project_root, 'output', 'content_aware_mf_model.pth')
+
+if mode == '1':
+    # --- [Mode 1] 새로 학습 ---
+    print(f"\n[Training] Started (Epochs: {EPOCHS})")
+    model.train()
+    
+    for epoch in range(EPOCHS):
+        total_loss = 0
+        for u, i, k, l in dataloader:
+            u, i, k, l = u.to(device), i.to(device), k.to(device), l.to(device)
+            optimizer.zero_grad()
+            loss = criterion(model(u, i, k), l.float())
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        
+        if (epoch+1) % 5 == 0: 
+            print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {total_loss/len(dataloader):.4f}")
+    
+    # [추가] 학습 완료 후 모델 저장
+    print(f"[System] Saving model to {MODEL_SAVE_PATH}...")
+    torch.save(model.state_dict(), MODEL_SAVE_PATH)
+    print("[System] Model saved successfully.")
+
+elif mode == '2':
+    # --- [Mode 2] 저장된 모델 로드 ---
+    if os.path.exists(MODEL_SAVE_PATH):
+        print(f"\n[System] Loading model from {MODEL_SAVE_PATH}...")
+        try:
+            # map_location은 CPU/GPU 환경에 맞춰 로드하도록 돕습니다.
+            model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=device))
+            print("[System] Model loaded successfully.")
+        except Exception as e:
+            print(f"[Error] Failed to load model: {e}")
+            print("새로 학습을 진행해 주세요.")
+            sys.exit()
+    else:
+        print(f"[Error] No saved model found at {MODEL_SAVE_PATH}.")
+        print("먼저 '1번'을 선택하여 모델을 학습시켜 주세요.")
+        sys.exit()
+
+else:
+    print("[Error] 잘못된 입력입니다. 프로그램을 종료합니다.")
+    sys.exit()
 
 # --- 6. 인터랙티브 랜덤 테스트 모드 ---
 print("\n[System] Training complete.")
