@@ -8,12 +8,21 @@ from openai import AsyncOpenAI, RateLimitError, APIError
 from dotenv import load_dotenv
 from tqdm.asyncio import tqdm
 import random
+from llm_costing import LLMCostTracker
 
 # --- 1. 환경 및 설정 ---
 load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
-if not API_KEY: sys.exit("오류: API 키 없음")
+if not API_KEY:
+    sys.exit("오류: API 키 없음")
 client = AsyncOpenAI(api_key=API_KEY)
+
+# run_costing.py 에서만 설정되는 코스트 측정 모드 플래그
+LLM_COSTING_MODE = os.getenv("LLM_COSTING_MODE")
+
+# 비용 산정용 단가 (gpt-4o-mini 기준, 필요 시 조정)
+INPUT_TOKEN_COST_PER_MILLION = 0.15
+OUTPUT_TOKEN_COST_PER_MILLION = 0.60
 
 # --- 기본 설정 ---
 TEST_MODE = False      
@@ -125,23 +134,35 @@ async def process_single_item(sem, item):
                 
                 response = await client.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
                     response_format={"type": "json_object"},
-                    temperature=0.2, max_tokens=150 # 키워드 수가 늘었으므로 max_tokens를 150으로 증가
+                    temperature=0.2,
+                    max_tokens=150,  # 키워드 수가 늘었으므로 max_tokens를 150으로 증가
                 )
                 
                 content = response.choices[0].message.content
                 parsed = json.loads(content)
+
+                # 토큰 사용량 추출 (코스트 측정용)
+                usage = getattr(response, "usage", None)
+                input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+                output_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
                 
                 await asyncio.sleep(1.0)
                 
                 # [수정] 결과 딕셔너리에 'features' 대신 'domain', 'task', 'method'를 포함
+                #       코스트 측정을 위해 토큰 정보도 함께 반환
                 return {
-                    "node_idx": node_idx, 
-                    "domain": parsed.get("domain", []), 
-                    "task": parsed.get("task", []), 
-                    "method": parsed.get("method", []), 
-                    "status": "success"
+                    "node_idx": node_idx,
+                    "domain": parsed.get("domain", []),
+                    "task": parsed.get("task", []),
+                    "method": parsed.get("method", []),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "status": "success",
                 }
             
             except RateLimitError as e:  # [수정] 'as e'를 추가하여 에러 객체를 잡습니다.
@@ -174,6 +195,15 @@ async def main():
         print("작업 완료!")
         return
 
+    # 코스트 측정 모드일 때만 비용 트래커 활성화
+    cost_tracker = None
+    if LLM_COSTING_MODE:
+        cost_tracker = LLMCostTracker(
+            project_size=len(work_items),
+            input_cost_per_million=INPUT_TOKEN_COST_PER_MILLION,
+            output_cost_per_million=OUTPUT_TOKEN_COST_PER_MILLION,
+        )
+
     # [설정 적용] 동시 요청 수 제한
     sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
     tasks = [process_single_item(sem, item) for item in work_items]
@@ -185,13 +215,21 @@ async def main():
     for f in tqdm.as_completed(tasks, total=len(tasks), desc="Processing"):
         result = await f
         
-        if result['status'] == 'fatal':
+        if result["status"] == "fatal":
             print("치명적 오류로 중단합니다.")
             break
             
-        if result['status'] == 'success':
+        if result["status"] == "success":
             results_cache.append(result)
             batch_results.append(result)
+
+            # 코스트 측정 모드일 때 토큰 사용량 기록
+            if cost_tracker is not None:
+                cost_tracker.add_call(
+                    input_tokens=result.get("input_tokens", 0),
+                    output_tokens=result.get("output_tokens", 0),
+                    meta={"node_idx": result.get("node_idx")},
+                )
         else:
             error_cache.append(result)
         
@@ -199,10 +237,16 @@ async def main():
             save_checkpoint()
             batch_results = [] 
             
-    if batch_results: save_checkpoint()
+    if batch_results:
+        save_checkpoint()
     if error_cache:
-        with open(ERROR_LOG_FILE, 'w', encoding='utf-8') as f:
+        with open(ERROR_LOG_FILE, "w", encoding="utf-8") as f:
             json.dump(error_cache, f, ensure_ascii=False, indent=4)
+
+    # 코스트 측정 요약 출력
+    if cost_tracker is not None:
+        cost_tracker.finalize()
+        cost_tracker.print_summary(label="Keyword Extraction Cost (full run)")
 
     print("-" * 50)
     print(f"완료! 총 {len(results_cache)}개 저장됨.")

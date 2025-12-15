@@ -9,29 +9,66 @@ import json
 import random
 import sys
 import time
+import asyncio
 from dotenv import load_dotenv
+from datetime import datetime
+
 load_dotenv()
 import torch
 import pandas as pd
 import numpy as np
-from openai import OpenAI
+from openai import AsyncOpenAI
 import networkx as nx
-from ogb.nodeproppred import PygNodePropPredDataset
 from collections import Counter, defaultdict
+from llm_costing import LLMCostTracker
 
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+# 비동기 OpenAI 클라이언트
+client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 GLOBAL_START = time.time()
 
 # -------------------------------------------------------
 # 0. Path Configuration
 # -------------------------------------------------------
-FFS_LOAD_FILE = "ogbn_arxiv_16k_ffs_sample.pt"
-NODE_TO_ID_MAP_PATH = "dataset/ogbn_arxiv/mapping/nodeidx2paperid.csv"
-TITLEABS_TSV_PATH = "titleabs.tsv"
-LABEL_MAPPING_PATH = "dataset/ogbn_arxiv/mapping/labelidx2arxivcategeory.csv.gz"
+
+# 현재 파일 위치를 기준으로 프로젝트 루트를 계산
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+
+# 데이터 경로 (다른 스크립트와 동일한 구조 사용)
+FFS_LOAD_FILE = os.path.join(project_root, "subdataset", "ogbn_arxiv_16k_ffs_sample.pt")
+NODE_TO_ID_MAP_PATH = os.path.join(
+    project_root, "dataset", "ogbn_arxiv", "mapping", "nodeidx2paperid.csv"
+)
+TITLEABS_TSV_PATH = os.path.join(project_root, "subdataset", "titleabs.tsv")
+LABEL_MAPPING_PATH = os.path.join(
+    project_root,
+    "dataset",
+    "ogbn_arxiv",
+    "mapping",
+    "labelidx2arxivcategeory.csv.gz",
+)
 
 SAMPLE_COUNT = 100
-OUTPUT_JSON_FILE = "topic_prediction_results.json"
+PROJECT_SIZE = 16000  # 전체 노드 수 기준 예상 비용 산정용
+
+# LLM 비동기 호출 동시 처리 개수
+MAX_CONCURRENT_REQUESTS = 10
+
+# 결과 저장 디렉토리 및 파일 (project_root/output/)
+OUTPUT_DIR = os.path.join(project_root, "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# 코스트 측정 모드 플래그 (run_costing.py 에서만 설정)
+LLM_COSTING_MODE = os.getenv("LLM_COSTING_MODE")
+
+# 코스트 측정 모드일 때는 타임스탬프/별도 접두어를 사용해서 기존 결과를 덮어쓰지 않음
+if LLM_COSTING_MODE:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    OUTPUT_JSON_FILE = os.path.join(
+        OUTPUT_DIR, f"topic_prediction_results_cost_{ts}.json"
+    )
+else:
+    OUTPUT_JSON_FILE = os.path.join(OUTPUT_DIR, "topic_prediction_results.json")
 
 LLM_MODEL = "gpt-4o-mini"
 SIMULATION_MODE = False
@@ -79,29 +116,41 @@ print(f"✅ Sampled {len(target_indices)} nodes.\n")
 
 
 # -------------------------------------------------------
-# 2-1. Build citation graph from ogbn-arxiv
+# 2-1. Build citation graph from local ogbn-arxiv edge list
 # -------------------------------------------------------
 
 def build_citation_graph():
     """
-    ogbn-arxiv PyG 데이터셋을 로드해서
+    로컬에 이미 내려받아 둔 ogbn-arxiv edge 리스트
+    (dataset/ogbn_arxiv/raw/edge.csv.gz)를 사용해서
     인용 그래프를 NetworkX DiGraph로 만들어준다.
+
     노드: 논문 인덱스 (0 ~ num_nodes-1)
     엣지: source(인용하는 논문) -> target(인용 당하는 논문)
     """
-    print("📌 Loading ogbn-arxiv dataset to build citation graph...")
-    dataset = PygNodePropPredDataset(name="ogbn-arxiv")
-    data = dataset[0]  # PyG Data 객체
+    edge_path = os.path.join(project_root, "dataset", "ogbn_arxiv", "raw", "edge.csv.gz")
+    if not os.path.exists(edge_path):
+        print(f"⛔ ERROR: edge file not found at {edge_path}")
+        sys.exit(1)
+
+    print(f"📌 Loading local ogbn-arxiv edges from {edge_path} ...")
+
+    # edge.csv.gz 형식: source,target 두 컬럼 (OGB 기본 포맷)
+    edges_df = pd.read_csv(edge_path, compression="gzip", header=None)
+    if edges_df.shape[1] < 2:
+        print("⛔ ERROR: edge.csv.gz does not have at least 2 columns (source, target).")
+        sys.exit(1)
+
+    src = edges_df.iloc[:, 0].astype(int).tolist()
+    dst = edges_df.iloc[:, 1].astype(int).tolist()
 
     G = nx.DiGraph()
-    G.add_nodes_from(range(data.num_nodes))
+    # 노드 수는 최대 인덱스 + 1 로 추정
+    max_node_idx = max(max(src), max(dst))
+    G.add_nodes_from(range(max_node_idx + 1))
+    G.add_edges_from(zip(src, dst))
 
-    source_nodes = data.edge_index[0].tolist()
-    target_nodes = data.edge_index[1].tolist()
-    edges = list(zip(source_nodes, target_nodes))
-    G.add_edges_from(edges)
-
-    print(f"✅ Citation graph built. #nodes={G.number_of_nodes()}, #edges={G.number_of_edges()}")
+    print(f"✅ Citation graph built from local file. #nodes={G.number_of_nodes()}, #edges={G.number_of_edges()}")
     return G
 
 
@@ -364,10 +413,11 @@ Return ONLY a JSON object of the form:
 
 
 # -------------------------------------------------------
-# 7. LLM Call
+# 7. LLM Call (async)
 # -------------------------------------------------------
 
-def call_llm_for_topic(
+
+async def call_llm_for_topic(
     title,
     abstract,
     node_idx=None,
@@ -417,7 +467,7 @@ def call_llm_for_topic(
         return result, 0, 0
 
     try:
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -457,7 +507,7 @@ def call_llm_for_topic(
 
 
 # -------------------------------------------------------
-# 8. Run classification for all samples
+# 8. Run classification for all samples (async)
 # -------------------------------------------------------
 print("📌 Starting LLM classification...\n")
 
@@ -467,76 +517,84 @@ llm_call_count = 0                   # 실제 LLM 호출 횟수
 
 topic_results = []
 
-for i, (title, abs_text) in enumerate(title_abs_texts):
-    node_idx = target_indices[i]
-    print(f"[{i+1}/{len(title_abs_texts)}] Processing node {node_idx}...")
-
-    if "ERROR" in abs_text:
-        print(" → Abstract missing, skipping.")
-        continue
-
-    # 현재 노드에 대한 citation 기반 context (저장도 하고, 프롬프트에도 사용)
-    citation_context = build_citation_trend_context(
-        node_idx=node_idx,
-        citation_graph=citation_graph,
-        node_to_label=node_to_label,
-        category_list=category_list,
-        max_neighbors=50,
+# 공통 비용 측정 트래커 (run_costing.py 로 실행될 때만 활성화)
+cost_tracker = (
+    LLMCostTracker(
+        project_size=PROJECT_SIZE,
+        # keyword 추출과 동일한 단가 사용 (필요시 변경 가능)
+        input_cost_per_million=0.15,
+        output_cost_per_million=0.60,
     )
+    if LLM_COSTING_MODE
+    else None
+)
 
-    llm_start = time.time()
-    result, in_tok, out_tok = call_llm_for_topic(
-        title,
-        abs_text,
-        node_idx=node_idx,
-        citation_graph=citation_graph,
-        node_to_label=node_to_label,
-        model=LLM_MODEL,
-        simulation=SIMULATION_MODE,
-        citation_context=citation_context,
-    )
-    llm_end = time.time()
 
-    if result is None:
-        print("   → LLM error, skipping.")
-        continue
+async def process_single_sample(idx, title, abs_text, node_idx, sem):
+    """단일 샘플을 비동기 처리."""
+    async with sem:
+        if "ERROR" in abs_text:
+            print(f" → Abstract missing for node {node_idx}, skipping.")
+            return None, 0.0
 
-    total_llm_time += (llm_end - llm_start)
-    llm_call_count += 1
-
-    # 🔹 primary(pred@1) + top-3 후보
-    pred_label_idx = result["label_idx"]
-    pred_category = result["category"]
-    reasoning = result["reasoning"]
-    candidates = result.get("candidates", [])
-
-    # 🔹 원래 레이블 찾기
-    true_label_idx = node_to_label.get(int(node_idx), None)
-    if true_label_idx is not None:
-        true_category = category_list[true_label_idx]
-    else:
-        true_category = "UNKNOWN"
-
-    # 🔹 콘솔 출력
-    print(f"   → Pred@1: {pred_label_idx} ({pred_category})")
-    if candidates:
-        top3_str = ", ".join(
-            [f"{c['label_idx']}({c['category']})" for c in candidates[:3]]
+        # 현재 노드에 대한 citation 기반 context (저장도 하고, 프롬프트에도 사용)
+        citation_context = build_citation_trend_context(
+            node_idx=node_idx,
+            citation_graph=citation_graph,
+            node_to_label=node_to_label,
+            category_list=category_list,
+            max_neighbors=50,
         )
-        print(f"   → Top-3: {top3_str}")
 
-    if true_label_idx is not None:
-        print(f"   → True: {true_label_idx} ({true_category})")
-        print(f"   → Match@1: {pred_label_idx == true_label_idx}")
-        in_top3 = any(
-            (c.get("label_idx") == true_label_idx) for c in candidates[:3]
+        llm_start = time.time()
+        result, in_tok, out_tok = await call_llm_for_topic(
+            title,
+            abs_text,
+            node_idx=node_idx,
+            citation_graph=citation_graph,
+            node_to_label=node_to_label,
+            model=LLM_MODEL,
+            simulation=SIMULATION_MODE,
+            citation_context=citation_context,
         )
-        print(f"   → In Top-3: {in_top3}")
-    else:
-        print("   → True: UNKNOWN (not found in FFS label map)")
+        llm_end = time.time()
 
-    topic_results.append(
-        {
+        if result is None:
+            print(f"   → LLM error, skipping node {node_idx}.")
+            return None, 0.0
+
+        # 🔹 primary(pred@1) + top-3 후보
+        pred_label_idx = result["label_idx"]
+        pred_category = result["category"]
+        reasoning = result["reasoning"]
+        candidates = result.get("candidates", [])
+
+        # 🔹 원래 레이블 찾기
+        true_label_idx = node_to_label.get(int(node_idx), None)
+        if true_label_idx is not None:
+            true_category = category_list[true_label_idx]
+        else:
+            true_category = "UNKNOWN"
+
+        # 🔹 콘솔 출력
+        print(f"   → Node {node_idx} Pred@1: {pred_label_idx} ({pred_category})")
+        if candidates:
+            top3_str = ", ".join(
+                [f"{c['label_idx']}({c['category']})" for c in candidates[:3]]
+            )
+            print(f"   → Top-3: {top3_str}")
+
+        if true_label_idx is not None:
+            print(f"   → True: {true_label_idx} ({true_category})")
+            print(f"   → Match@1: {pred_label_idx == true_label_idx}")
+            in_top3 = any(
+                (c.get("label_idx") == true_label_idx) for c in candidates[:3]
+            )
+            print(f"   → In Top-3: {in_top3}")
+        else:
+            print("   → True: UNKNOWN (not found in FFS label map)")
+
+        record = {
             "node_index": node_idx,
             "title": title,
             "abstract": abs_text,
@@ -560,10 +618,51 @@ for i, (title, abs_text) in enumerate(title_abs_texts):
             "output_tokens": out_tok,
             "citation_context": citation_context,
         }
-    )
+
+        return record, (llm_end - llm_start)
+
+
+async def run_classification():
+    global total_llm_time, llm_call_count
+
+    sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+    tasks = []
+
+    for i, (title, abs_text) in enumerate(title_abs_texts):
+        node_idx = target_indices[i]
+        print(f"[{i+1}/{len(title_abs_texts)}] Scheduling node {node_idx}...")
+        tasks.append(process_single_sample(i, title, abs_text, node_idx, sem))
+
+    completed = 0
+    for coro in asyncio.as_completed(tasks):
+        record, duration = await coro
+        if record is None:
+            continue
+
+        topic_results.append(record)
+        total_llm_time += duration
+        llm_call_count += 1
+
+        # 공통 비용 트래커에 토큰 사용량 기록 (코스트 모드에서만)
+        if cost_tracker is not None:
+            cost_tracker.add_call(
+                input_tokens=record["input_tokens"],
+                output_tokens=record["output_tokens"],
+                meta={"node_index": record["node_index"]},
+            )
+        completed += 1
+        print(f"   → Completed {completed}/{len(tasks)} samples.")
+
+
+asyncio.run(run_classification())
 
 print("\n✅ Classification completed.\n")
 classification_end = time.time()
+
+# 비용 측정 종료 및 요약 출력 (코스트 모드에서만)
+if cost_tracker is not None:
+    cost_tracker.finalize()
+    cost_tracker.print_summary(label="Topic Prediction Cost (sample-based projection)")
 
 
 # -------------------------------------------------------
