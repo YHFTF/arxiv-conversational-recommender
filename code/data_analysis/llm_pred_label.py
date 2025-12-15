@@ -21,6 +21,7 @@ from openai import AsyncOpenAI
 import networkx as nx
 from collections import Counter, defaultdict
 from llm_costing import LLMCostTracker
+from llm_async import iter_with_concurrency
 
 # 비동기 OpenAI 클라이언트
 client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -530,112 +531,127 @@ cost_tracker = (
 )
 
 
-async def process_single_sample(idx, title, abs_text, node_idx, sem):
+async def process_single_sample(item):
     """단일 샘플을 비동기 처리."""
-    async with sem:
-        if "ERROR" in abs_text:
-            print(f" → Abstract missing for node {node_idx}, skipping.")
-            return None, 0.0
+    idx = item["idx"]
+    title = item["title"]
+    abs_text = item["abstract"]
+    node_idx = item["node_idx"]
 
-        # 현재 노드에 대한 citation 기반 context (저장도 하고, 프롬프트에도 사용)
-        citation_context = build_citation_trend_context(
-            node_idx=node_idx,
-            citation_graph=citation_graph,
-            node_to_label=node_to_label,
-            category_list=category_list,
-            max_neighbors=50,
+    if "ERROR" in abs_text:
+        print(f" → Abstract missing for node {node_idx}, skipping.")
+        return None, 0.0
+
+    # 현재 노드에 대한 citation 기반 context (저장도 하고, 프롬프트에도 사용)
+    citation_context = build_citation_trend_context(
+        node_idx=node_idx,
+        citation_graph=citation_graph,
+        node_to_label=node_to_label,
+        category_list=category_list,
+        max_neighbors=50,
+    )
+
+    llm_start = time.time()
+    result, in_tok, out_tok = await call_llm_for_topic(
+        title,
+        abs_text,
+        node_idx=node_idx,
+        citation_graph=citation_graph,
+        node_to_label=node_to_label,
+        model=LLM_MODEL,
+        simulation=SIMULATION_MODE,
+        citation_context=citation_context,
+    )
+    llm_end = time.time()
+
+    if result is None:
+        print(f"   → LLM error, skipping node {node_idx}.")
+        return None, 0.0
+
+    # 🔹 primary(pred@1) + top-3 후보
+    pred_label_idx = result["label_idx"]
+    pred_category = result["category"]
+    reasoning = result["reasoning"]
+    candidates = result.get("candidates", [])
+
+    # 🔹 원래 레이블 찾기
+    true_label_idx = node_to_label.get(int(node_idx), None)
+    if true_label_idx is not None:
+        true_category = category_list[true_label_idx]
+    else:
+        true_category = "UNKNOWN"
+
+    # 🔹 콘솔 출력
+    print(f"   → Node {node_idx} Pred@1: {pred_label_idx} ({pred_category})")
+    if candidates:
+        top3_str = ", ".join(
+            [f"{c['label_idx']}({c['category']})" for c in candidates[:3]]
         )
+        print(f"   → Top-3: {top3_str}")
 
-        llm_start = time.time()
-        result, in_tok, out_tok = await call_llm_for_topic(
-            title,
-            abs_text,
-            node_idx=node_idx,
-            citation_graph=citation_graph,
-            node_to_label=node_to_label,
-            model=LLM_MODEL,
-            simulation=SIMULATION_MODE,
-            citation_context=citation_context,
+    if true_label_idx is not None:
+        print(f"   → True: {true_label_idx} ({true_category})")
+        print(f"   → Match@1: {pred_label_idx == true_label_idx}")
+        in_top3 = any(
+            (c.get("label_idx") == true_label_idx) for c in candidates[:3]
         )
-        llm_end = time.time()
+        print(f"   → In Top-3: {in_top3}")
+    else:
+        print("   → True: UNKNOWN (not found in FFS label map)")
 
-        if result is None:
-            print(f"   → LLM error, skipping node {node_idx}.")
-            return None, 0.0
-
-        # 🔹 primary(pred@1) + top-3 후보
-        pred_label_idx = result["label_idx"]
-        pred_category = result["category"]
-        reasoning = result["reasoning"]
-        candidates = result.get("candidates", [])
-
-        # 🔹 원래 레이블 찾기
-        true_label_idx = node_to_label.get(int(node_idx), None)
-        if true_label_idx is not None:
-            true_category = category_list[true_label_idx]
-        else:
-            true_category = "UNKNOWN"
-
-        # 🔹 콘솔 출력
-        print(f"   → Node {node_idx} Pred@1: {pred_label_idx} ({pred_category})")
-        if candidates:
-            top3_str = ", ".join(
-                [f"{c['label_idx']}({c['category']})" for c in candidates[:3]]
+    record = {
+        "node_index": node_idx,
+        "title": title,
+        "abstract": abs_text,
+        "pred_label_idx": pred_label_idx,
+        "pred_category": pred_category,
+        "reasoning": reasoning,
+        "topk_candidates": candidates,  # top-3 전체 저장
+        "true_label_idx": true_label_idx,
+        "true_category": true_category,
+        "is_correct_top1": (
+            true_label_idx is not None and pred_label_idx == true_label_idx
+        ),
+        "is_correct_top3": (
+            true_label_idx is not None
+            and any(
+                (c.get("label_idx") == true_label_idx)
+                for c in candidates[:3]
             )
-            print(f"   → Top-3: {top3_str}")
+        ),
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "citation_context": citation_context,
+    }
 
-        if true_label_idx is not None:
-            print(f"   → True: {true_label_idx} ({true_category})")
-            print(f"   → Match@1: {pred_label_idx == true_label_idx}")
-            in_top3 = any(
-                (c.get("label_idx") == true_label_idx) for c in candidates[:3]
-            )
-            print(f"   → In Top-3: {in_top3}")
-        else:
-            print("   → True: UNKNOWN (not found in FFS label map)")
-
-        record = {
-            "node_index": node_idx,
-            "title": title,
-            "abstract": abs_text,
-            "pred_label_idx": pred_label_idx,
-            "pred_category": pred_category,
-            "reasoning": reasoning,
-            "topk_candidates": candidates,  # top-3 전체 저장
-            "true_label_idx": true_label_idx,
-            "true_category": true_category,
-            "is_correct_top1": (
-                true_label_idx is not None and pred_label_idx == true_label_idx
-            ),
-            "is_correct_top3": (
-                true_label_idx is not None
-                and any(
-                    (c.get("label_idx") == true_label_idx)
-                    for c in candidates[:3]
-                )
-            ),
-            "input_tokens": in_tok,
-            "output_tokens": out_tok,
-            "citation_context": citation_context,
-        }
-
-        return record, (llm_end - llm_start)
+    return record, (llm_end - llm_start)
 
 
 async def run_classification():
     global total_llm_time, llm_call_count
 
-    sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-    tasks = []
-
+    items = []
     for i, (title, abs_text) in enumerate(title_abs_texts):
         node_idx = target_indices[i]
         print(f"[{i+1}/{len(title_abs_texts)}] Scheduling node {node_idx}...")
-        tasks.append(process_single_sample(i, title, abs_text, node_idx, sem))
+        items.append(
+            {
+                "idx": i,
+                "title": title,
+                "abstract": abs_text,
+                "node_idx": node_idx,
+            }
+        )
 
     completed = 0
-    for coro in asyncio.as_completed(tasks):
-        record, duration = await coro
+
+    async for (record, duration) in iter_with_concurrency(
+        items,
+        process_single_sample,
+        max_concurrency=MAX_CONCURRENT_REQUESTS,
+        label="Topic LLM",
+        enable_progress=True,
+    ):
         if record is None:
             continue
 
@@ -651,7 +667,7 @@ async def run_classification():
                 meta={"node_index": record["node_index"]},
             )
         completed += 1
-        print(f"   → Completed {completed}/{len(tasks)} samples.")
+        print(f"   → Completed {completed}/{len(items)} samples.")
 
 
 asyncio.run(run_classification())

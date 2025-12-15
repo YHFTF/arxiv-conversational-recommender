@@ -6,9 +6,9 @@ import pandas as pd
 import torch
 from openai import AsyncOpenAI, RateLimitError, APIError
 from dotenv import load_dotenv
-from tqdm.asyncio import tqdm
 import random
 from llm_costing import LLMCostTracker
+from llm_async import iter_with_concurrency
 
 # --- 1. 환경 및 설정 ---
 load_dotenv()
@@ -101,16 +101,20 @@ print(f"처리할 작업: {len(work_items)}개")
 
 # --- 3. Async LLM Processor ---
 
-async def process_single_item(sem, item):
-    async with sem:
-        node_idx = item['idx']
-        text = item['text']
-        
-        # [수정] 시스템 프롬프트: 분류 기준 명시
-        system_prompt = "You are an expert Research Analyst. Extract the core technical concepts from the paper's content, strictly classifying them into Domain, Task, and Method."
-        
-        # [수정] 사용자 프롬프트: JSON 구조 및 키워드 배분 가이드 명시
-        user_prompt = f"""
+
+async def process_single_item(item):
+    """단일 논문에 대해 LLM을 호출하여 키워드를 추출."""
+    node_idx = item["idx"]
+    text = item["text"]
+
+    # 시스템 프롬프트: 분류 기준 명시
+    system_prompt = (
+        "You are an expert Research Analyst. Extract the core technical concepts from the paper's content, "
+        "strictly classifying them into Domain, Task, and Method."
+    )
+
+    # 사용자 프롬프트: JSON 구조 및 키워드 배분 가이드 명시
+    user_prompt = f"""
         Extract a total of **5 to 7 most critical keywords** and classify them into the following three categories. Do not invent new keywords.
         - **Domain (1-2 KWs)**: The main research field (e.g., Computer Vision, NLP, Distributed Systems).
         - **Task (2-3 KWs)**: The specific problem being solved (e.g., Image Segmentation, Dialogue Generation, Phase Retrieval).
@@ -123,72 +127,73 @@ async def process_single_item(sem, item):
             "task": ["kw_task1", "kw_task2"], 
             "method": ["kw_method1", "kw_method2"]
         }}
-        """
-        
-        max_retries = 10 
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                await asyncio.sleep(0.2)
-                
-                response = await client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.2,
-                    max_tokens=150,  # 키워드 수가 늘었으므로 max_tokens를 150으로 증가
-                )
-                
-                content = response.choices[0].message.content
-                parsed = json.loads(content)
+    """
 
-                # 토큰 사용량 추출 (코스트 측정용)
-                usage = getattr(response, "usage", None)
-                input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
-                output_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
-                
-                await asyncio.sleep(1.0)
-                
-                # [수정] 결과 딕셔너리에 'features' 대신 'domain', 'task', 'method'를 포함
-                #       코스트 측정을 위해 토큰 정보도 함께 반환
-                return {
-                    "node_idx": node_idx,
-                    "domain": parsed.get("domain", []),
-                    "task": parsed.get("task", []),
-                    "method": parsed.get("method", []),
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "status": "success",
-                }
-            
-            except RateLimitError as e:  # [수정] 'as e'를 추가하여 에러 객체를 잡습니다.
-                # 1. 429 에러의 구체적인 원인(메시지)을 추출하여 출력합니다.
-                #    (이 메시지를 보면 RPM 초과인지, 하루 할당량(RPD) 초과인지 알 수 있습니다)
-                error_detail = e.body.get('message', str(e)) if hasattr(e, 'body') and e.body else str(e)
-                tqdm.write(f"\n[429 상세 원인] Node {node_idx}: {error_detail}")
+    max_retries = 10
+    retry_count = 0
 
-                # 2. 대기 시간 설정 (보내주신 로직 유지)
-                #    (주의: DELAY_BEFORE_REQUEST 변수가 코드 상단에 정의되어 있어야 에러가 안 납니다)
-                wait_time = 3 if 'DELAY_BEFORE_REQUEST' in globals() and DELAY_BEFORE_REQUEST > 0 else (5 + retry_count * 2)
-                
-                tqdm.write(f"[일시정지] Node {node_idx}: 429 발생! {wait_time}초 대기...")
-                await asyncio.sleep(wait_time)
-                retry_count += 1
-                
-            except Exception as e:
-                tqdm.write(f"[오류] Node {node_idx}: {e}")
-                # 쿼터 부족(돈 없음/일일한도)은 치명적 오류로 처리
-                if "insufficient_quota" in str(e): 
-                    return {"node_idx": node_idx, "status": "fatal"}
-                await asyncio.sleep(2)
-                retry_count += 1
+    while retry_count < max_retries:
+        try:
+            await asyncio.sleep(0.2)
 
-        tqdm.write(f"[최종실패] Node {node_idx}: 재시도 횟수 초과")
-        return {"node_idx": node_idx, "error": "Max retries exceeded", "status": "failed"}
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.2,
+                max_tokens=150,  # 키워드 수가 늘었으므로 max_tokens를 150으로 증가
+            )
+
+            content = response.choices[0].message.content
+            parsed = json.loads(content)
+
+            # 토큰 사용량 추출 (코스트 측정용)
+            usage = getattr(response, "usage", None)
+            input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+            output_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+
+            await asyncio.sleep(1.0)
+
+            # 결과 딕셔너리에 'domain', 'task', 'method' 및 토큰 정보 포함
+            return {
+                "node_idx": node_idx,
+                "domain": parsed.get("domain", []),
+                "task": parsed.get("task", []),
+                "method": parsed.get("method", []),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "status": "success",
+            }
+
+        except RateLimitError as e:
+            # 429 에러 상세 출력
+            error_detail = (
+                e.body.get("message", str(e)) if hasattr(e, "body") and e.body else str(e)
+            )
+            print(f"\n[429 상세 원인] Node {node_idx}: {error_detail}")
+
+            # 대기 시간 설정
+            wait_time = (
+                3
+                if "DELAY_BEFORE_REQUEST" in globals() and DELAY_BEFORE_REQUEST > 0
+                else (5 + retry_count * 2)
+            )
+            print(f"[일시정지] Node {node_idx}: 429 발생! {wait_time}초 대기...")
+            await asyncio.sleep(wait_time)
+            retry_count += 1
+
+        except Exception as e:
+            print(f"[오류] Node {node_idx}: {e}")
+            if "insufficient_quota" in str(e):
+                return {"node_idx": node_idx, "status": "fatal"}
+            await asyncio.sleep(2)
+            retry_count += 1
+
+    print(f"[최종실패] Node {node_idx}: 재시도 횟수 초과")
+    return {"node_idx": node_idx, "error": "Max retries exceeded", "status": "failed"}
 
 async def main():
     if not work_items:
@@ -204,21 +209,25 @@ async def main():
             output_cost_per_million=OUTPUT_TOKEN_COST_PER_MILLION,
         )
 
-    # [설정 적용] 동시 요청 수 제한
-    sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-    tasks = [process_single_item(sem, item) for item in work_items]
-    
-    print(f"▶ 실행 모드: 동시 {MAX_CONCURRENT_REQUESTS}개 요청 / 요청 간 대기 {DELAY_BEFORE_REQUEST}초")
-    
+    print(
+        f"▶ 실행 모드: 동시 {MAX_CONCURRENT_REQUESTS}개 요청 / "
+        f"요청 간 대기 {DELAY_BEFORE_REQUEST}초"
+    )
+
     batch_results = []
-    
-    for f in tqdm.as_completed(tasks, total=len(tasks), desc="Processing"):
-        result = await f
-        
+
+    # 공통 비동기 유틸을 사용한 처리 + 진행률 표시
+    async for result in iter_with_concurrency(
+        work_items,
+        process_single_item,
+        max_concurrency=MAX_CONCURRENT_REQUESTS,
+        label="Keyword LLM",
+        enable_progress=True,
+    ):
         if result["status"] == "fatal":
             print("치명적 오류로 중단합니다.")
             break
-            
+
         if result["status"] == "success":
             results_cache.append(result)
             batch_results.append(result)
@@ -232,11 +241,11 @@ async def main():
                 )
         else:
             error_cache.append(result)
-        
+
         if len(batch_results) >= SAVE_INTERVAL:
             save_checkpoint()
-            batch_results = [] 
-            
+            batch_results = []
+
     if batch_results:
         save_checkpoint()
     if error_cache:
