@@ -8,7 +8,7 @@ torch.serialization.add_safe_globals([HeteroData])
 
 # --- 경로 설정 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-HETERO_GRAPH_FILE = os.path.join(project_root, 'subdataset', 'hetero_graph.pt')
+HETERO_GRAPH_FILE = os.path.join(project_root, 'subdataset', 'hetero_graph_v2.pt')
 AUTHOR_MAP_FILE = os.path.join(project_root, 'output', 'author_remapping.json')
 
 
