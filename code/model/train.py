@@ -1,92 +1,63 @@
 import torch
 import torch.nn as nn
-import os
-import sys
-import numpy as np
+import torch.optim as optim
+import os, sys
+from torch_geometric.data import HeteroData
 
-# 모델 파일 경로 설정
+# 모델 클래스 로드 (LGCmodel.py가 같은 폴더에 있다고 가정)
 project_root = r"C:\Users\Arachne\OneDrive\Desktop\arxiv-conversational-recommender-main"
 sys.path.append(os.path.join(project_root, 'code', 'model'))
+from LGCmodel import ArxivLightGCN
 
-# LGCmodel.py에서 클래스 가져오기
-try:
-    from LGCmodel import ArxivLightGCN
-except ImportError:
-    print("❌ LGCmodel.py를 찾을 수 없습니다. 경로를 확인하세요.")
-
-# --- 1. 설정 및 장치 준비 ---
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# --- 설정 ---
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 GRAPH_PATH = os.path.join(project_root, 'subdataset', 'build_hetero_graph.pt')
-OUTPUT_DIR = os.path.join(project_root, 'output')
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+SAVE_PATH = os.path.join(project_root, 'output', 'lightgcn_v3_trained.pt')
 
-# --- 2. 데이터 로드 함수 ---
-def load_data():
-    if not os.path.exists(GRAPH_PATH):
-        raise FileNotFoundError(f"❌ 그래프 파일을 찾을 수 없습니다: {GRAPH_PATH}")
+def train():
+    print(f"🖥️ 사용 장치: {DEVICE}")
     
-    print(f"📦 그래프 로드 중: {GRAPH_PATH}")
-    # weights_only=False는 PyTorch 최신 버전 호환성을 위해 필요합니다.
-    data = torch.load(GRAPH_PATH, weights_only=False)
-    return data.to(device)
+    # 1. 정렬된 v3 데이터 로드
+    data = torch.load(GRAPH_PATH, weights_only=False).to(DEVICE)
+    print(f"📦 그래프 로드 완료: {GRAPH_PATH}")
 
-# --- 3. 메인 학습 함수 (이게 'main'입니다!) ---
-def main():
-    print(f"🖥️  사용 장치: {device}")
+    # 2. 모델 초기화
+    model = ArxivLightGCN(data, embedding_dim=128, num_layers=2).to(DEVICE)
+    optimizer = optim.Adam(model.parameters(), lr=0.005)
     
-    # 데이터 로드
-    data = load_data()
+    # 통합 에지 인덱스 생성
+    unified_edges = model._build_unified_edge_index(data)
     
-    # 모델 초기화
-    # 인자: data, embedding_dim=64, num_layers=3
-    model = ArxivLightGCN(data, embedding_dim=64, num_layers=3).to(device)
-    
-    # 통합 에지 인덱스 생성 (LGCmodel 내의 메서드 호출)
-    unified_edge_index = model._build_unified_edge_index(data).to(device)
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
-    
-    # 학습 타겟: Paper -> Paper 인용 관계
-    pos_edge_index = data['paper', 'cites', 'paper'].edge_index
-    num_papers = data['paper'].num_nodes
-
-    print("\n" + "="*50)
-    print(f"🚀 LightGCN 학습 시작 (총 {pos_edge_index.size(1):,}개 관계)")
-    print("="*50)
-
+    # 3. 학습 루프 (BPR Loss 또는 Simple Contrastive Loss)
+    # 여기서는 추천의 기본인 임베딩 유사도 극대화를 위해 간단한 재구성 학습을 진행합니다.
     model.train()
-    for epoch in range(1, 101):
+    print("🚀 학습 시작...")
+    
+    for epoch in range(1, 51):
         optimizer.zero_grad()
         
-        # 1. 모든 노드 임베딩 추출 (전파 수행)
-        out = model(unified_edge_index)
+        # LightGCN 전파
+        out = model(unified_edges)
         
-        # 2. 네거티브 샘플링 (랜덤하게 연결되지 않은 논문 선택)
-        neg_edge_index = torch.randint(0, num_papers, pos_edge_index.size(), device=device)
+        # 간단한 자가 학습 (Self-supervised): 연결된 노드끼리 임베딩이 비슷해지도록
+        # (실제 추천 엔진에서는 BPR Loss를 쓰지만, 프로토타입은 가볍게 시작합니다)
+        pos_src = unified_edges[0]
+        pos_dst = unified_edges[1]
         
-        # 3. BPR Loss 계산
-        # LightGCN 모델 내부의 recommendation_loss 활용
-        loss = model.model.recommendation_loss(
-            out, 
-            pos_edge_index, 
-            neg_edge_index
-        )
+        # 내적(Dot Product)을 통한 유사도 계산
+        pos_scores = (out[pos_src] * out[pos_dst]).sum(dim=-1)
+        loss = -torch.log(torch.sigmoid(pos_scores)).mean()
         
         loss.backward()
         optimizer.step()
         
         if epoch % 10 == 0 or epoch == 1:
-            print(f"Epoch [{epoch:3d}/100] | Loss: {loss.item():.4f}")
+            print(f"Epoch {epoch:3d} | Loss: {loss.item():.4f}")
 
-    # --- 4. 학습 결과 저장 ---
-    SAVE_PATH = os.path.join(OUTPUT_DIR, 'lightgcn_trained_model.pt')
+    # 4. 결과 저장
+    os.makedirs(os.path.dirname(SAVE_PATH), exist_ok=True)
     torch.save(model.state_dict(), SAVE_PATH)
-    print(f"\n✅ 학습 완료 및 모델 저장: {SAVE_PATH}")
+    print(f"✅ 학습 완료 및 모델 저장: {SAVE_PATH}")
 
-# --- 5. 실행부 ---
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        import traceback
-        print(f"❌ 실행 중 에러 발생:\n{traceback.format_exc()}")
+    train()

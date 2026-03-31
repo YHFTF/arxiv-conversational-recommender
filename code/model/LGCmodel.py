@@ -1,87 +1,76 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import LightGCN
-from torch_geometric.utils import degree
+from torch_geometric.nn.conv import LGConv
+from torch_geometric.utils import coalesce, degree
 
 class ArxivLightGCN(nn.Module):
-    def __init__(self, data, embedding_dim=64, num_layers=3):
-        super().__init__()
-        # 1. 모든 노드의 총 개수 계산 (Paper + Author + Topic)
+    def __init__(self, data, embedding_dim=128, num_layers=2):
+        super(ArxivLightGCN, self).__init__()
+        self.num_layers = num_layers
         self.num_papers = data['paper'].num_nodes
         self.num_authors = data['author'].num_nodes
         self.num_topics = data['topic'].num_nodes
-        self.total_nodes = self.num_papers + self.num_authors + self.num_topics
-
-        # 2. 오프셋 설정 (전체 인덱스에서 각 노드 타입의 시작 위치)
+        
         self.offset_author = self.num_papers
         self.offset_topic = self.num_papers + self.num_authors
+        self.total_nodes = self.num_papers + self.num_authors + self.num_topics
 
-        # 3. 이종 그래프 에지를 단일 에지 리스트로 통합
-        edge_index = self._build_unified_edge_index(data)
+        device = data['paper'].x.device
+        # 초기 임베딩 통합
+        combined_x = torch.cat([
+            data['paper'].x, 
+            data['author'].x, 
+            data['topic'].x
+        ], dim=0).to(device)
         
-        # 4. PyG LightGCN 모델 초기화
-        self.model = LightGCN(
-            num_nodes=self.total_nodes,
-            embedding_dim=embedding_dim,
-            num_layers=num_layers
-        )
+        self.embedding = nn.Parameter(combined_x)
+        
+        # 🌟 PyG의 LightGCN 모델 대신 개별 LGConv 레이어를 직접 사용합니다.
+        self.convs = nn.ModuleList([LGConv() for _ in range(num_layers)])
 
     def _build_unified_edge_index(self, data):
-        edge_indices = []
+        device = self.embedding.device
+        edge_list = []
 
-        # (1) Paper - Paper (Cites)
-        edge_indices.append(data['paper', 'cites', 'paper'].edge_index)
-
-        # (2) Author - Paper (Writes) -> Author 인덱스에 오프셋 추가
-        ap_edge = data['author', 'writes', 'paper'].edge_index.clone()
+        # 모든 관계를 long(int64)으로 강제 통합
+        edge_list.append(data['paper', 'cites', 'paper'].edge_index.to(torch.int64))
+        
+        ap_edge = data['author', 'writes', 'paper'].edge_index.clone().to(torch.int64)
         ap_edge[0] += self.offset_author
-        edge_indices.append(ap_edge)
-        edge_indices.append(ap_edge.flip(0)) # 무향 그래프화
+        edge_list.append(ap_edge); edge_list.append(ap_edge.flip(0))
 
-        # (3) Paper - Topic (Has_Topic) -> Topic 인덱스에 오프셋 추가
-        pt_edge = data['paper', 'has_topic', 'topic'].edge_index.clone()
+        pt_edge = data['paper', 'has_topic', 'topic'].edge_index.clone().to(torch.int64)
         pt_edge[1] += self.offset_topic
-        edge_indices.append(pt_edge)
-        edge_indices.append(pt_edge.flip(0)) # 무향 그래프화
+        edge_list.append(pt_edge); edge_list.append(pt_edge.flip(0))
 
-        return torch.cat(edge_indices, dim=1)
+        unified = torch.cat(edge_list, dim=1).to(device)
+        unified, _ = coalesce(unified, None, num_nodes=self.total_nodes)
+        
+        return unified.to(torch.int64)
 
     def forward(self, edge_index):
-        # LightGCN의 특징: 최종 임베딩(e_0, e_1, ..., e_L의 평균) 반환
-        return self.model.get_embedding(edge_index)
-
-    def recommend_loss(self, out, pos_edge_index, neg_edge_index):
-        # BPR (Bayesian Personalized Ranking) Loss 계산
-        return self.model.recommendation_loss(out, pos_edge_index, neg_edge_index)
-
-# --- 실행 예시 ---
-def train():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    data = torch.load('subdataset/build_hetero_graph.pt', weights_only=False).to(device)
-    
-    # 모델 생성
-    model = ArxivLightGCN(data, embedding_dim=128, num_layers=3).to(device)
-    unified_edge_index = model._build_unified_edge_index(data).to(device)
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-    model.train()
-    for epoch in range(1, 101):
-        optimizer.zero_grad()
+        # 🌟 수동 메시지 패싱 루프
+        # 내부 gcn_norm 에러를 피하기 위해 연산 전 타입을 확실히 고정합니다.
+        edge_index = edge_index.to(torch.int64)
         
-        # 전체 노드 임베딩 추출
-        out = model(unified_edge_index)
-        
-        # 포지티브/네거티브 샘플링 (여기서는 예시로 Paper-Paper 인용 관계 학습)
-        pos_edge = data['paper', 'cites', 'paper'].edge_index
-        # 네거티브 샘플링 로직 필요 (생략)
-        
-        # loss = model.recommend_loss(...)
-        # loss.backward()
-        # optimizer.step()
-        
-        if epoch % 10 == 0:
-            print(f"Epoch {epoch} 학습 중...")
+        # 정규화 계수(Normalization)를 수동으로 계산 (scatter 에러 지점을 우회)
+        row, col = edge_index
+        deg = degree(col, self.total_nodes, dtype=self.embedding.dtype)
+        deg_inv_sqrt = deg.pow(-0.5)
+        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
 
-    print("✅ 학습 완료!")
+        emb = self.embedding
+        embs = [emb]
+
+        for conv in self.convs:
+            # 개별 레이어 연산 수행
+            emb = conv(emb, edge_index, edge_weight=norm)
+            embs.append(emb)
+
+        # 모든 레이어의 결과 평균 (LightGCN의 핵심 공식)
+        out = torch.stack(embs, dim=0).mean(dim=0)
+        return out
+
+    def get_paper_embeddings(self, out):
+        return out[:self.num_papers]

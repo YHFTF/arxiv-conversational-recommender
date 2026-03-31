@@ -44,7 +44,19 @@ def verify_v2_6column_knowledge():
     print(header)
     print("-" * 175)
 
-    test_nodes = [0, 52, 74, 100]
+    # --- 수정된 노드 선택 부분 ---
+    num_samples = 10  # 확인하고 싶은 랜덤 샘플 개수
+    all_paper_indices = edge_index[0].unique() # 에지가 존재하는 논문 인덱스들
+    
+    # 랜덤하게 10개 추출
+    if len(all_paper_indices) >= num_samples:
+        random_indices = torch.randperm(len(all_paper_indices))[:num_samples]
+        test_nodes = all_paper_indices[random_indices].tolist()
+    else:
+        test_nodes = all_paper_indices.tolist()
+    
+    test_nodes.sort() # 보기 편하게 정렬
+    # --------------------------
     
     for g_idx in test_nodes:
         mask = (edge_index[0] == g_idx)
