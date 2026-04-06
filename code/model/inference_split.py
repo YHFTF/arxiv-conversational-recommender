@@ -3,39 +3,38 @@ import json
 import os
 import sys
 
-# 경로 설정
+# 1. 경로 및 모델 설정
 project_root = r"C:\Users\Arachne\OneDrive\Desktop\arxiv-conversational-recommender-main"
 sys.path.append(os.path.join(project_root, 'code', 'model'))
-from LGCmodel_v2 import ArxivLightGCNV2
+from LGCmodel import ArxivLightGCN # v3 구조 중심 모델
 
-# 파일 경로
-GRAPH_PATH = os.path.join(project_root, 'subdataset', 'build_hetero_graph_v2.pt')
-MODEL_PATH = os.path.join(project_root, 'output', 'lightgcn_v2_trained.pt')
+# 파일 경로 (train_split.py에서 저장한 경로와 일치해야 함)
+GRAPH_PATH = os.path.join(project_root, 'subdataset', 'build_hetero_graph.pt')
+MODEL_PATH = os.path.join(project_root, 'output', 'lightgcn_split_trained.pt')
 MASTER_FILE = os.path.join(project_root, 'subdataset', 'arxiv_master_final.json')
-META_PATH = os.path.join(project_root, 'output', 'knowledge_meta.json')
 
-def recommend_v2(target_title, top_k=5):
+def recommend_split(target_title, top_k=5):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # 1. 메타데이터 및 데이터 로드
-    with open(META_PATH, 'r', encoding='utf-8') as f:
-        meta = json.load(f)
-    meta_counts = {'domains': len(meta['domains']), 'tasks': len(meta['tasks']), 'methods': len(meta['methods'])}
+    # 2. 데이터 및 모델 로드
+    if not os.path.exists(MODEL_PATH):
+        print(f"❌ 에러: {MODEL_PATH} 가중치 파일이 없습니다. 학습을 먼저 완료하세요.")
+        return
 
     data = torch.load(GRAPH_PATH, weights_only=False).to(device)
     with open(MASTER_FILE, 'r', encoding='utf-8') as f:
         master_list = json.load(f)
     
-    # 2. V2 모델 초기화 및 가중치 로드
-    model = ArxivLightGCNV2(data, meta_counts).to(device)
+    # 모델 초기화 및 가중치 로드
+    model = ArxivLightGCN(data, embedding_dim=128, num_layers=2).to(device)
     model.load_state_dict(torch.load(MODEL_PATH, weights_only=True))
     model.eval()
 
-    # 3. 모든 논문 임베딩 추출
+    # 3. 임베딩 계산 (전체 그래프 활용)
     with torch.no_grad():
-        unified_edges = model._build_unified_graph(data)
+        unified_edges = model._build_unified_edge_index(data)
         all_embeddings = model(unified_edges)
-        paper_embeddings = model.get_paper_embeddings(all_embeddings)
+        paper_embeddings = all_embeddings[:16000] # Paper 노드 임베딩만 슬라이싱
 
     # 4. 제목 검색
     target_idx = -1
@@ -49,12 +48,14 @@ def recommend_v2(target_title, top_k=5):
         print(f"❌ '{target_title}' 논문을 찾을 수 없습니다.")
         return
 
-    # 5. 코사인 유사도 기반 추천
+    # 5. 코사인 유사도 계산
     target_vec = paper_embeddings[target_idx].unsqueeze(0)
     sim_scores = torch.cosine_similarity(target_vec, paper_embeddings)
+    
+    # 자기 자신 제외하고 Top-K 추출
     values, indices = torch.topk(sim_scores, k=top_k + 1)
     
-# 1. 그래프 데이터에서 인용수(In-degree) 계산
+    # 1. 그래프 데이터에서 인용수(In-degree) 계산
     # 'cites' 에지의 [0]은 인용하는 논문, [1]은 인용받는 논문입니다.
     if ('paper', 'cites', 'paper') in data.edge_types:
         edge_index = data['paper', 'cites', 'paper'].edge_index
@@ -89,4 +90,4 @@ def recommend_v2(target_title, top_k=5):
         print("-" * 115)
 
 if __name__ == "__main__":
-    recommend_v2("graph neural networks for social recommendation")
+    recommend_split("graph neural networks for social recommendation")

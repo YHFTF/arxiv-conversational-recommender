@@ -10,7 +10,7 @@ from LGCmodel import ArxivLightGCN
 
 # 파일 경로
 GRAPH_PATH = os.path.join(project_root, 'subdataset', 'build_hetero_graph.pt')
-MODEL_PATH = os.path.join(project_root, 'output', 'lightgcn_v3_trained.pt')
+MODEL_PATH = os.path.join(project_root, 'output', 'lightgcn_trained.pt')
 MASTER_FILE = os.path.join(project_root, 'subdataset', 'arxiv_master_final.json')
 
 def recommend(target_title, top_k=5):
@@ -56,20 +56,39 @@ def recommend(target_title, top_k=5):
     # 자기 자신 제외하고 상위 K개 추출
     values, indices = torch.topk(sim_scores, k=top_k + 1)
     
-    print(f"\n📚 '{target_title}'와(과) 유사한 추천 논문 리스트:")
-    print("-" * 100)
+ # 1. 그래프 데이터에서 인용수(In-degree) 계산
+    # 'cites' 에지의 [0]은 인용하는 논문, [1]은 인용받는 논문입니다.
+    if ('paper', 'cites', 'paper') in data.edge_types:
+        edge_index = data['paper', 'cites', 'paper'].edge_index
+        cited_papers = edge_index[1]  # 인용을 받은(target) 논문 인덱스들
+        
+        # 전체 논문 수만큼 빈 카운터 생성 (기본값 0)
+        num_papers = paper_embeddings.size(0)
+        citation_counts = torch.zeros(num_papers, dtype=torch.long)
+        
+        # 인용받은 횟수 합산 (CPU로 옮겨서 처리하는 게 안정적입니다)
+        unique_indices, counts = torch.unique(cited_papers, return_counts=True)
+        citation_counts[unique_indices] = counts.cpu()
+    else:
+        citation_counts = torch.zeros(paper_embeddings.size(0), dtype=torch.long)
+
+    # 2. 결과 출력 부분 수정
+    print(f"\n📊 [Split-Trained] '{target_title}' 기반 추천 리스트:")
+    print("=" * 115)
     
-    for i in range(1, len(indices)): # 0번은 자기 자신
+    for i in range(1, len(indices)):
         idx = indices[i].item()
         score = values[i].item()
         rec_item = master_list[idx]
         
-        print(f"[{i}] 유사도: {score:.4f} | 제목: {rec_item['title']}")
-        print(f"    └ 도메인: {rec_item['knowledge']['domain']}")
-        print(f"    └ 주요기법: {rec_item['knowledge']['method']}")
-        print("-" * 100)
+        # .pt 파일에서 추출한 실제 인용수
+        graph_cites = citation_counts[idx].item()
+        
+        # 출력 포맷 (유사도 | 인용수 | 제목)
+        print(f"[{i}] 유사도: {score:.4f} | 📈 그래프 인용수: {graph_cites:<4} | 제목: {rec_item['title']}")
+        k = rec_item.get('knowledge', {})
+        print(f"    - 분야: {k.get('domain', 'N/A')} | 기법: {k.get('method', 'N/A')}")
+        print("-" * 115)
 
 if __name__ == "__main__":
-    # 어제 테스트했던 Booking.com 논문이나 관심 있는 키워드를 입력해보세요!
-    search_query = "evasion attacks" 
-    recommend(search_query)
+    recommend("graph neural networks for social recommendation")

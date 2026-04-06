@@ -12,7 +12,7 @@ from LGCmodel import ArxivLightGCN
 # --- 설정 ---
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 GRAPH_PATH = os.path.join(project_root, 'subdataset', 'build_hetero_graph.pt')
-SAVE_PATH = os.path.join(project_root, 'output', 'lightgcn_v3_trained.pt')
+SAVE_PATH = os.path.join(project_root, 'output', 'lightgcn_trained.pt')
 
 def train():
     print(f"🖥️ 사용 장치: {DEVICE}")
