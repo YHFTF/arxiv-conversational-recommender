@@ -4,7 +4,7 @@ import os
 import sys
 
 # 경로 설정
-project_root = r"C:\Users\Arachne\OneDrive\Desktop\arxiv-conversational-recommender-main"
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.append(os.path.join(project_root, 'code', 'model'))
 from LGCmodel import ArxivLightGCN
 

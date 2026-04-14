@@ -4,7 +4,7 @@ import torch.optim as optim
 import os, sys, json
 
 # 1. 경로 및 모델 로드
-project_root = r"C:\Users\Arachne\OneDrive\Desktop\arxiv-conversational-recommender-main"
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.append(os.path.join(project_root, 'code', 'model'))
 from LGCmodel_v2 import ArxivLightGCNV2 # v2 지식 확장 모델
 

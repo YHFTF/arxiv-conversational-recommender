@@ -5,7 +5,7 @@ import os, sys
 from torch_geometric.data import HeteroData
 
 # 모델 클래스 로드 (v3 구조 중심 모델)
-project_root = r"C:\Users\Arachne\OneDrive\Desktop\arxiv-conversational-recommender-main"
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.append(os.path.join(project_root, 'code', 'model'))
 from LGCmodel import ArxivLightGCN # v3에서 썼던 기본 모델
 

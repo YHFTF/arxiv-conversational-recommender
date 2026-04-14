@@ -85,6 +85,6 @@ def recommend_v3(target_title, top_k=5):
         print("-" * 115)
 
 if __name__ == "__main__":
-    # 커맨드라인 인자가 있으면 그걸 검색어로 사용, 없으면 기본값 사용
-    query = sys.argv[1] if len(sys.argv) > 1 else "graph neural networks"
+    # 커맨드라인 인자가 있으면 그걸 검색어로 사용, 없으면 v2와 동일한 기본값 사용
+    query = sys.argv[1] if len(sys.argv) > 1 else "graph neural networks for social recommendation"
     recommend_v3(query)

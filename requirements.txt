@@ -1,7 +1,10 @@
 torch
+torch-geometric
 networkx
 numpy
 pandas
 openai
 ogb
-torch_geometric
+python-dotenv
+requests
+scikit-learn
