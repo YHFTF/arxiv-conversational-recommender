@@ -78,12 +78,12 @@ def build_unified_graph(data):
 
     edge_list = []
 
-    # Paper  Paper (인용)
+    # Paper - Paper (인용)
     pp_edge = data['paper', 'cites', 'paper'].edge_index.to(torch.int64)
     pp_mask = (pp_edge[0] < num_papers) & (pp_edge[1] < num_papers)
     edge_list.append(pp_edge[:, pp_mask])
 
-    # Author  Paper (양방향)
+    # Author - Paper (양방향)
     ap_edge = data['author', 'writes', 'paper'].edge_index.clone().to(torch.int64)
     ap_mask = (ap_edge[0] < num_authors) & (ap_edge[1] < num_papers)
     ap_edge = ap_edge[:, ap_mask]
@@ -91,7 +91,7 @@ def build_unified_graph(data):
     edge_list.append(ap_edge)
     edge_list.append(ap_edge.flip(0))
 
-    # Paper  Topic (양방향)
+    # Paper - Topic (양방향)
     pt_edge = data['paper', 'has_topic', 'topic'].edge_index.clone().to(torch.int64)
     pt_mask = (pt_edge[0] < num_papers) & (pt_edge[1] < num_topics)
     pt_edge = pt_edge[:, pt_mask]
@@ -178,6 +178,18 @@ def evaluate_ranking(out, edges, num_papers, k=TOP_K, batch_size=EVAL_BATCH_SIZE
     상위 K위 안에 드는지를 측정합니다.
     """
     src, pos_dst = edges[0], edges[1]
+
+    # ======================================================
+    # [수정] 평가 대상은 '논문 -> 논문' 연결로만 한정합니다!
+    mask = (src < num_papers) & (pos_dst < num_papers)
+    src = src[mask]
+    pos_dst = pos_dst[mask]
+
+    # 평가할 에지가 없으면 0.0 반환
+    if src.size(0) == 0: 
+        return 0.0, 0.0
+    # ======================================================
+
     paper_embeddings = out[:num_papers]
     total_edges = src.size(0)
 
@@ -202,6 +214,9 @@ def evaluate_ranking(out, edges, num_papers, k=TOP_K, batch_size=EVAL_BATCH_SIZE
         all_hits.append(hits)
         all_ndcgs.append(ndcg)
 
+    if not all_hits:  # 안전 장치: 루프를 돌았지만 데이터가 없을 경우
+        return 0.0, 0.0
+
     final_hits = torch.cat(all_hits).mean().item()
     final_ndcg = torch.cat(all_ndcgs).mean().item()
 
@@ -213,6 +228,18 @@ def evaluate_cold_start(model, test_out, test_edges, num_papers, k=TOP_K, batch_
     쿼리 노드의 ID 정보(Identity)를 배제하고 오직 특징과 지식만 사용합니다.
     """
     src, pos_dst = test_edges[0], test_edges[1]
+
+    # ======================================================
+    # [수정] 평가 대상은 '논문 -> 논문' 연결로만 한정합니다!
+    mask = (src < num_papers) & (pos_dst < num_papers)
+    src = src[mask]
+    pos_dst = pos_dst[mask]
+
+    # 평가할 에지가 없으면 0.0 반환
+    if src.size(0) == 0: 
+        return 0.0, 0.0
+    # ======================================================
+
     # 추천 후보군은 일반적인 학습된 임베딩 사용
     paper_embeddings = test_out[:num_papers]
     total_edges = src.size(0)
@@ -243,6 +270,9 @@ def evaluate_cold_start(model, test_out, test_edges, num_papers, k=TOP_K, batch_
 
         all_hits.append(hits)
         all_ndcgs.append(ndcg)
+
+    if not all_hits:  # 안전 장치: 루프를 돌았지만 데이터가 없을 경우
+        return 0.0, 0.0
 
     final_hits = torch.cat(all_hits).mean().item()
     final_ndcg = torch.cat(all_ndcgs).mean().item()
