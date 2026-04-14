@@ -19,8 +19,10 @@ class ArxivLightGCNV4(nn.Module):
         paper_x = data['paper'].x
 
         # --- [V4: 지식 주입 세팅] ---
-        # 1. Base 논문 임베딩 고정 등록 
-        self.register_buffer('paper_base_x', paper_x)
+        # 1. Base 논문 임베딩 (V2처럼 학습 가능하도록 Parameter로 변경)
+        self.paper_base_x = nn.Parameter(paper_x)
+        # 콜드 스타트용 원본 피처 (학습되지 않은 순수 텍스트 벡터)
+        self.register_buffer('paper_raw_x', paper_x.clone())
         
         # 2. 16000 편의 논문에 대응하는 [16000, 3] 지식 ID 배열
         self.register_buffer('paper_knowledge_ids', paper_knowledge_ids.long().to(device))
@@ -34,7 +36,7 @@ class ArxivLightGCNV4(nn.Module):
         if 'x' in data['author']:
             author_x = data['author'].x
         else:
-            print("✍️ Author 피처 실시간 생성 중...")
+            print(" Author 피처 실시간 생성 중...")
             author_x = torch.zeros((self.num_authors, embedding_dim), device=device)
             ap_edge = data['author', 'writes', 'paper'].edge_index
             author_x.index_add_(0, ap_edge[0], paper_x[ap_edge[1]])
@@ -44,7 +46,7 @@ class ArxivLightGCNV4(nn.Module):
         if 'x' in data['topic']:
             topic_x = data['topic'].x
         else:
-            print("📂 Topic 피처 실시간 생성 중...")
+            print(" Topic 피처 실시간 생성 중...")
             topic_x = torch.zeros((self.num_topics, embedding_dim), device=device)
             pt_edge = data['paper', 'has_topic', 'topic'].edge_index
             topic_x.index_add_(0, pt_edge[1], paper_x[pt_edge[0]])
@@ -120,3 +122,16 @@ class ArxivLightGCNV4(nn.Module):
 
     def get_paper_embeddings(self, out):
         return out[:self.num_papers]
+
+    def get_cold_start_embeddings(self, node_ids):
+        """[V4 전용] 콜드 스타트용 임베딩 생성.
+        학습된 개별 논문 파라미터(paper_base_x)와 이웃 전파 없이,
+        오직 원본 피처와 지식 임베딩만 결합하여 반환합니다.
+        """
+        node_ids = node_ids.to(self.paper_raw_x.device)
+        d_val = self.domain_emb(self.paper_knowledge_ids[node_ids, 0])
+        t_val = self.task_emb(self.paper_knowledge_ids[node_ids, 1])
+        m_val = self.method_emb(self.paper_knowledge_ids[node_ids, 2])
+        
+        # 원본 피처 + 지식 임베딩
+        return self.paper_raw_x[node_ids] + d_val + t_val + m_val
