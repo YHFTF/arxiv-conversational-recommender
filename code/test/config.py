@@ -17,9 +17,10 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 EMBEDDING_DIM = 128
 NUM_LAYERS = 2
 LEARNING_RATE = 0.005
-NUM_EPOCHS = 100
+NUM_EPOCHS = 200
 EVAL_INTERVAL = 5
 SEED = 42
+KNOWLEDGE_WEIGHT = 0.1 #식 임베딩 반영 강도 (과도한 노이즈 방지)
 
 # === 평가 설정 ===
 TOP_K = 20

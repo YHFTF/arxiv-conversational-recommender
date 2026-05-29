@@ -284,7 +284,7 @@ def evaluate_cold_start(model, test_out, test_edges, num_papers, k=TOP_K, batch_
 # 6. 통합 학습 루프
 # ============================================================
 def train_and_evaluate(model, train_edges, val_edges, test_edges, num_papers,
-                       model_name="Model", save_path=None):
+                       model_name="Model", save_path=None, force_retrain=False):
     """통일된 BPR 학습 + 평가를 수행합니다.
 
     두 가지 모드(General, Cold-Start)의 성능을 모두 측정합니다.
@@ -295,35 +295,39 @@ def train_and_evaluate(model, train_edges, val_edges, test_edges, num_papers,
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-    for epoch in range(1, NUM_EPOCHS + 1):
-        model.train()
-        optimizer.zero_grad()
+    # 이미 모델이 있고 재학습을 강제하지 않는 경우 학습 건너뜀
+    if not force_retrain and save_path and os.path.exists(save_path):
+        print(f"  [LOAD] '{os.path.basename(save_path)}' 기존 가중치를 로드하여 평가를 진행합니다.")
+    else:
+        for epoch in range(1, NUM_EPOCHS + 1):
+            model.train()
+            optimizer.zero_grad()
 
-        out = model(train_edges)
+            out = model(train_edges)
 
-        pos_src, pos_dst = train_edges[0], train_edges[1]
-        neg_dst = torch.randint(0, model.total_nodes, (pos_src.size(0),), device=DEVICE)
+            pos_src, pos_dst = train_edges[0], train_edges[1]
+            neg_dst = torch.randint(0, model.total_nodes, (pos_src.size(0),), device=DEVICE)
 
-        pos_scores = (out[pos_src] * out[pos_dst]).sum(dim=-1)
-        neg_scores = (out[pos_src] * out[neg_dst]).sum(dim=-1)
-        bpr_loss = -torch.log(torch.sigmoid(pos_scores - neg_scores) + 1e-15).mean()
+            pos_scores = (out[pos_src] * out[pos_dst]).sum(dim=-1)
+            neg_scores = (out[pos_src] * out[neg_dst]).sum(dim=-1)
+            bpr_loss = -torch.log(torch.sigmoid(pos_scores - neg_scores) + 1e-15).mean()
 
-        bpr_loss.backward()
-        optimizer.step()
+            bpr_loss.backward()
+            optimizer.step()
 
-        model.eval()
-        with torch.no_grad():
-            val_out = model(train_edges)
-            val_recall, val_ndcg = evaluate_ranking(val_out, val_edges, num_papers)
+            model.eval()
+            with torch.no_grad():
+                val_out = model(train_edges)
+                val_recall, val_ndcg = evaluate_ranking(val_out, val_edges, num_papers)
 
-            if val_ndcg > best_val_ndcg:
-                best_val_ndcg = val_ndcg
-                if save_path:
-                    torch.save(model.state_dict(), save_path)
+                if val_ndcg > best_val_ndcg:
+                    best_val_ndcg = val_ndcg
+                    if save_path:
+                        torch.save(model.state_dict(), save_path)
 
-        if epoch % EVAL_INTERVAL == 0 or epoch == 1:
-            print(f"  [{model_name}] Epoch {epoch:3d} | BPR Loss: {bpr_loss.item():.4f} "
-                  f"| Val R@{TOP_K}: {val_recall:.4f} | Val N@{TOP_K}: {val_ndcg:.4f}")
+            if epoch % EVAL_INTERVAL == 0 or epoch == 1:
+                print(f"  [{model_name}] Epoch {epoch:3d} | BPR Loss: {bpr_loss.item():.4f} "
+                      f"| Val R@{TOP_K}: {val_recall:.4f} | Val N@{TOP_K}: {val_ndcg:.4f}")
 
     # Best 모델 복원 후 최종 테스트 (General + Cold-Start)
     if save_path and os.path.exists(save_path):

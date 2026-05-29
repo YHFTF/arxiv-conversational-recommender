@@ -4,9 +4,10 @@ from torch_geometric.nn.conv import LGConv
 from torch_geometric.utils import coalesce, degree
 
 class ArxivLightGCNV4(nn.Module):
-    def __init__(self, data, meta_counts, paper_knowledge_ids, embedding_dim=128, num_layers=2):
+    def __init__(self, data, meta_counts, paper_knowledge_ids, embedding_dim=128, num_layers=2, knowledge_weight=0.1):
         super(ArxivLightGCNV4, self).__init__()
         self.num_layers = num_layers
+        self.knowledge_weight = knowledge_weight
         self.num_papers = data['paper'].num_nodes
         self.num_authors = data['author'].num_nodes
         self.num_topics = data['topic'].num_nodes
@@ -98,7 +99,8 @@ class ArxivLightGCNV4(nn.Module):
         t_val = self.task_emb(self.paper_knowledge_ids[:, 1])
         m_val = self.method_emb(self.paper_knowledge_ids[:, 2])
         
-        dynamic_paper_x = self.paper_base_x + d_val + t_val + m_val
+        # 가중치(knowledge_weight)를 적용하여 지식의 영향력 조절
+        dynamic_paper_x = self.paper_base_x + self.knowledge_weight * (d_val + t_val + m_val)
         
         # 2. 전체 노드의 시작 값으로 결합
         return torch.cat([dynamic_paper_x, self.author_emb, self.topic_emb], dim=0)
@@ -133,5 +135,5 @@ class ArxivLightGCNV4(nn.Module):
         t_val = self.task_emb(self.paper_knowledge_ids[node_ids, 1])
         m_val = self.method_emb(self.paper_knowledge_ids[node_ids, 2])
         
-        # 원본 피처 + 지식 임베딩
-        return self.paper_raw_x[node_ids] + d_val + t_val + m_val
+        # 원본 피처 + 가중치 적용된 지식 임베딩
+        return self.paper_raw_x[node_ids] + self.knowledge_weight * (d_val + t_val + m_val)
