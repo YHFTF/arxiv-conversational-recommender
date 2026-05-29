@@ -117,12 +117,9 @@ def find_best_semantic_match(term, vocab_dict, vocab_embs, sorted_keys, api_key,
     max_sim = max_sim.item()
     best_idx = best_idx.item()
     
-    if max_sim >= threshold:
-        matched_term = sorted_keys[best_idx]
-        matched_id = best_idx + 1 # ID는 1부터 시작하므로
-        return matched_id, matched_term, max_sim
-    else:
-        return 0, f"No Match (Best: {sorted_keys[best_idx]} with {max_sim:.4f})", max_sim
+    matched_term = sorted_keys[best_idx]
+    matched_id = best_idx + 1 # ID는 1부터 시작하므로
+    return matched_id, matched_term, max_sim
 
 
 def main():
@@ -199,13 +196,7 @@ def main():
 
         print("\n🤖 [STEP 1] 트랜스포머(Embedding) 및 GNN 지식 신경망 작동 중...")
         
-        # 1. 트랜스포머 API를 통한 128차원 의미 벡터 실시간 인코딩
-        raw_text_emb = get_openai_text_embedding_128d(nl_query, api_key)
-        if raw_text_emb is None:
-            print("   - 텍스트 임베딩 생성에 실패했습니다. 다시 시도해 주세요.")
-            continue
-            
-        # 2. LLM 시맨틱 파싱
+        # 1. LLM 시맨틱 파싱 (자연어 질문 독해)
         specs = extract_semantic_specs_from_nl(nl_query, api_key)
         if not specs:
             print("   - 시맨틱 카테고리 분석에 실패했습니다. 다시 시도해 주세요.")
@@ -233,16 +224,14 @@ def main():
             t_vec = model.task_emb(torch.tensor([t_id], device=DEVICE))
             m_vec = model.method_emb(torch.tensor([m_id], device=DEVICE))
             
-            # OpenAI가 구운 128차원 텍스트 벡터에 GNN 지식 임베딩 합산
-            query_embedding = raw_text_emb.unsqueeze(0) + KNOWLEDGE_WEIGHT * (d_vec + t_vec + m_vec)
+            # 순수 GNN 네이티브 임베딩 조합 (OpenAI 벡터 배제하여 공간 충돌 차단)
+            query_embedding = d_vec + t_vec + m_vec
 
-            # 전체 16000 편 모델 임베딩 로드
-            train_unified_edges = build_unified_graph_v2(raw_data)
-            out_embeddings = model(train_unified_edges)
-            paper_embeddings = out_embeddings[:num_papers]
+            # GNN 네이티브 합성 공간 로드 (합성 전 공간 정렬 적용)
+            paper_embeddings = model.get_cold_start_embeddings(torch.arange(num_papers, device=DEVICE))
             
-            # 코사인 유사도 연산 (순수 벡터 공간 거리 연산)
-            sim_scores = torch.cosine_similarity(query_embedding, paper_embeddings)
+            # 내적(Dot Product) 연산: GNN BPR Loss의 학습 수학과 완전 정렬
+            sim_scores = torch.matmul(paper_embeddings, query_embedding.t()).squeeze(-1)
             values, indices = torch.topk(sim_scores, k=args.top_k)
 
         print(f"\n📊 [{args.top_k} 개의 End-to-End 순수 딥러닝 추천 결과 (V3)]")
@@ -253,7 +242,7 @@ def main():
             score = values[rank].item()
             rec_item = master_list[idx]
             
-            print(f"[{rank + 1}] 유사도: {score:.4f} | 제목: {rec_item['title']}")
+            print(f"[{rank + 1}] 매칭 점수: {score:.4f} | 제목: {rec_item['title']}")
             k = rec_item.get('knowledge', {})
             print(f"    - Domain: {k.get('domain', 'N/A')} | Task: {k.get('task', 'N/A')} | Method: {k.get('method', 'N/A')}")
             print("-" * 105)
