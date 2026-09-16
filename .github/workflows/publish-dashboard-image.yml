@@ -1,0 +1,51 @@
+name: Publish dashboard image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - dashboard/**
+      - requirements.txt
+      - requirements-docker.txt
+      - docker-compose.dashboard.yml
+      - .github/workflows/publish-dashboard-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-dashboard-image
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dashboard/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/yhftf/arxiv-conversational-recommender-dashboard:main
+            ghcr.io/yhftf/arxiv-conversational-recommender-dashboard:sha-${{ github.sha }}
+          build-args: |
+            INSTALL_ML_DEPS=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

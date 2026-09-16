@@ -1,10 +1,7 @@
 services:
   dashboard:
-    build:
-      context: .
-      dockerfile: dashboard/Dockerfile
-      args:
-        INSTALL_ML_DEPS: ${INSTALL_ML_DEPS:-true}
+    image: ${DASHBOARD_IMAGE:-ghcr.io/yhftf/arxiv-conversational-recommender-dashboard:main}
+    pull_policy: always
     ports:
       - "0.0.0.0:${DASHBOARD_PORT:-8080}:8080"
     environment:
@@ -18,5 +15,6 @@ services:
       - .:/workspace
       - dashboard-data:/dashboard-data
     restart: unless-stopped
+
 volumes:
   dashboard-data:
