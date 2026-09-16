@@ -61,18 +61,6 @@ ARTIFACT_STORAGE_PATH=
 - `OUTPUT_STORAGE_PATH`: Docker와 호스트가 함께 사용할 결과 디렉터리입니다. Google Drive·NAS처럼 호스트에 마운트된 경로도 지정할 수 있습니다.
 - `ARTIFACT_STORAGE_PATH`: 대시보드에서 가져오기/내보내기를 수행할 외부 저장소의 컨테이너 내부 경로입니다. 저장소가 준비되기 전에는 비워 둡니다.
 
-Python 스크립트를 직접 실행할 때는 현재 셸에도 API 키를 설정합니다.
-
-```powershell
-# Windows PowerShell
-$env:OPENAI_API_KEY="sk-..."
-```
-
-```bash
-# macOS/Linux
-export OPENAI_API_KEY="sk-..."
-```
-
 ### 실행 확인 및 종료
 
 ```powershell
@@ -96,44 +84,16 @@ NVIDIA GPU를 학습 컨테이너에 연결하려면 NVIDIA Container Toolkit이
 docker compose -f docker-compose.dashboard.yml -f docker-compose.gpu.yml up -d
 ```
 
-### Python 개발 환경
-
-Python 3.11 환경을 권장합니다. 먼저 운영체제와 CUDA 버전에 맞는 PyTorch를 설치한 뒤 공통 의존성을 설치합니다.
-
-```bash
-python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# macOS/Linux
-source .venv/bin/activate
-
-python -m pip install --upgrade pip
-python -m pip install torch
-python -m pip install -r requirements.txt
-```
-
-CUDA 12.4 Linux 환경에서는 저장소에 고정된 Docker용 의존성을 사용할 수 있습니다.
-
-```bash
-python -m pip install -r requirements-docker.txt
-```
-
-대시보드만 로컬에서 실행하려면:
-
-```bash
-python -u dashboard/server.py
-```
+Python, PyTorch, CUDA용 패키지와 프로젝트 의존성은 배포된 Docker 이미지에 이미 설치되어 있습니다. 호스트에서 가상환경을 만들거나 `pip install`을 실행할 필요가 없습니다.
 
 ## 주요 실행 방법
 
-모든 명령은 프로젝트 루트에서 실행합니다.
+학습과 벤치마크는 대시보드에서 실행할 수 있습니다. CLI가 필요할 때는 프로젝트 루트에서 다음과 같이 실행 중인 `dashboard` 컨테이너 안의 Python을 사용합니다.
 
 ### V4 지식 그래프 모델 학습
 
 ```bash
-python code/model/train_v4_knowledge_bpr.py
+docker compose -f docker-compose.dashboard.yml exec dashboard python code/model/train_v4_knowledge_bpr.py
 ```
 
 학습된 가중치는 `output/lightgcn_v4_knowledge_bpr.pt`에 저장됩니다. 이 스크립트는 100 epoch 동안 학습하며 CUDA가 없으면 CPU를 사용합니다.
@@ -141,7 +101,7 @@ python code/model/train_v4_knowledge_bpr.py
 ### 통합 벤치마크 v2
 
 ```bash
-python code/test/run_benchmark_v2.py
+docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/run_benchmark_v2.py
 ```
 
 다음 5개 모델을 동일한 분할에서 비교합니다.
@@ -155,8 +115,8 @@ python code/test/run_benchmark_v2.py
 벤치마크 v2는 학습 그래프에서 콜드 스타트 논문의 모든 연결을 격리한 뒤 Recall@20과 NDCG@20을 평가합니다. 특정 모델만 실행하거나 기존 가중치를 무시하려면 다음 옵션을 사용합니다.
 
 ```bash
-python code/test/run_benchmark_v2.py --only "LightGCN + Knowledge (Ours)"
-python code/test/run_benchmark_v2.py --force-retrain
+docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/run_benchmark_v2.py --only "LightGCN + Knowledge (Ours)"
+docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/run_benchmark_v2.py --force-retrain
 ```
 
 결과 JSON과 모델 가중치는 `output/benchmark/`에 저장됩니다.
@@ -166,7 +126,7 @@ python code/test/run_benchmark_v2.py --force-retrain
 자연어 질의에서 Domain·Task·Method를 추출하고, 메타데이터 사전과 시맨틱 매칭한 뒤 V4 지식 임베딩 공간에서 논문을 추천합니다.
 
 ```bash
-python code/test/run_nl_inference_v2.py --top_k 5 --threshold 0.35
+docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/run_nl_inference_v2.py --top_k 5 --threshold 0.35
 ```
 
 필요 조건:
@@ -178,13 +138,13 @@ python code/test/run_nl_inference_v2.py --top_k 5 --threshold 0.35
 메타 임베딩 파일이 없다면 아래 명령으로 생성할 수 있습니다. OpenAI Embeddings API 비용이 발생합니다.
 
 ```bash
-python code/test/word_embedding.py
+docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/word_embedding.py
 ```
 
 ### 제목 기반 추천
 
 ```bash
-python code/test/run_inference.py --query "graph neural network" --top_k 5
+docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/run_inference.py --query "graph neural network" --top_k 5
 ```
 
 이 명령은 `run_benchmark.py`가 만든 해당 모델 가중치를 사용합니다.
