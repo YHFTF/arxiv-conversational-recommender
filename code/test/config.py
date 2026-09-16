@@ -6,9 +6,12 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 
 # === 데이터 경로 ===
 GRAPH_PATH = os.path.join(PROJECT_ROOT, 'subdataset', 'build_hetero_graph_v2.pt')
-META_PATH = os.path.join(PROJECT_ROOT, 'output', 'knowledge_meta.json')
+SHARED_OUTPUT_DIR = os.path.abspath(
+    os.getenv('OUTPUT_DIR', os.path.join(PROJECT_ROOT, 'output'))
+)
+META_PATH = os.path.join(SHARED_OUTPUT_DIR, 'knowledge_meta.json')
 MASTER_FILE = os.path.join(PROJECT_ROOT, 'subdataset', 'arxiv_master_final.json')
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, 'output', 'benchmark')
+OUTPUT_DIR = os.path.join(SHARED_OUTPUT_DIR, 'benchmark')
 
 # === 장치 ===
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

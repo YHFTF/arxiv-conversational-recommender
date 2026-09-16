@@ -14,7 +14,7 @@ from config import *
 from utils_v2 import load_data, get_graph_info, build_unified_graph_v2
 from LGCmodel_v4 import ArxivLightGCNV4
 
-META_EMB_PATH = os.path.join(PROJECT_ROOT, 'output', 'knowledge_meta_embeddings.pt')
+META_EMB_PATH = os.path.join(SHARED_OUTPUT_DIR, 'knowledge_meta_embeddings.pt')
 
 
 def extract_semantic_specs_from_nl(nl_query, api_key):

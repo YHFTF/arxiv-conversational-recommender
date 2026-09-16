@@ -1,138 +1,255 @@
 # LLM-Enhanced Paper Recommendation System
 
-이 프로젝트는 기존의 협업 필터링(Collaborative Filtering) 한계를 극복하기 위해 **LLM(Large Language Model)이 추출한 핵심 키워드**를 활용하는 **하이브리드 논문 추천 시스템**입니다.
+LLM이 논문에서 추출한 Domain·Task·Method 지식과 논문 인용, 저자, 토픽 그래프를 결합한 하이브리드 논문 추천 시스템입니다. OGBN-Arxiv에서 샘플링한 약 1.6만 편의 논문을 대상으로 LightGCN 기반 추천, 콜드 스타트 평가, 자연어 질의를 지원합니다.
 
-OGBN-Arxiv 데이터셋을 기반으로 하며, 단순히 논문의 ID만 학습하는 것이 아니라 논문의 내용(Context)을 이해하여 사용자의 연구 관심사에 맞는 논문을 정교하게 추천합니다.
+## 초기 세팅
 
-## 📂 프로젝트 데이터 (Download)
+### Windows 원클릭 설치 (권장)
 
-이 프로젝트에서 사용된 전처리 완료 데이터(1.6만 개 샘플 및 매핑 파일 등)는 아래 링크에서 다운로드할 수 있습니다.
+준비물:
 
-  * **데이터 다운로드 링크:** [Google Drive - Project Data Files](https://drive.google.com/file/d/1MjrUjslFcvrxOJ9gB77AvpBvvzXvoNom/view?usp=sharing)
+- Git for Windows
+- Docker Desktop(Docker Compose v2 포함)
+- 실행 중인 Docker Desktop
 
-> **참고:** 다운로드한 파일들은 프로젝트의 `dataset/` 또는 `subdataset/` 폴더 경로에 위치시켜야 코드가 정상적으로 작동합니다.
+설치 순서:
 
-## 💻 상세 코드 설명 (Code Descriptions)
+1. 프로젝트를 설치할 빈 폴더를 만듭니다.
+2. 이 저장소의 `setup.bat` 파일 하나만 해당 폴더에 넣습니다.
+3. `setup.bat`을 더블클릭합니다.
 
-이 프로젝트는 크게 데이터 수집, 데이터 분석(LLM 활용), 그리고 추천 모델 프로토타이핑의 3단계로 구성되어 있습니다.
+스크립트가 저장소의 `main` 브랜치를 내려받고, GHCR의 대시보드 이미지를 받아 실행한 뒤 브라우저에서 <http://localhost:8080>을 엽니다.
 
-### 1. Data Collection (`code/data_collection/`)
-거대 그래프 데이터를 다루기 쉬운 크기로 줄이고, 추천 시스템을 위한 '유저' 개념을 생성하는 단계입니다.
+> 기존 Git 저장소에서 실행하면 로컬 변경 사항을 덮어쓰지 않고 `git merge --ff-only`로만 업데이트합니다. fast-forward가 불가능하면 작업을 중단합니다.
 
-* **`forest_fire.py`**
-    * **기능:** 16.9만 개의 노드를 가진 OGBN-Arxiv 그래프를 Forest Fire Sampling 기법을 사용하여 1.6만 개(약 10%)로 다운샘플링합니다.
-    * **특징:** 원본 그래프의 위상적 특성(Topological Structure)을 최대한 유지하며 `ogbn_arxiv_16k_ffs_sample.pt` 파일을 생성합니다.
-* **`author_mapper.py`**
-    * **기능:** OpenAlex API를 활용하여, 샘플링된 논문의 실제 저자(Author) 정보를 수집합니다.
-    * **특징:** MAG ID 기반으로 매핑하며, 수집된 저자 데이터는 추후 Cold-Start 문제를 해결하기 위한 유저 프로필로 사용됩니다.
-* **`user_gen(TF-IDF).py`**
-    * **기능:** 저자 이름과 논문 텍스트(TF-IDF 상위 키워드)를 결합하여 추천 시스템의 학습 데이터인 '유저-아이템 상호작용(Interaction)'을 생성합니다.
-    * **특징:** 저자가 작성한 논문의 키워드 히스토리를 분석하여 유저의 관심사 프로필을 구축합니다.
-* **`loader.py`**
-    * **기능:** OGBN-Arxiv 데이터셋을 안전하게 로드하기 위한 유틸리티 스크립트입니다 (PyTorch 보안 패치 포함).
+### 데이터 파일 설치
 
-### 2. Data Analysis & LLM (`code/data_analysis/`)
-단순한 텍스트 매칭을 넘어, LLM을 통해 논문의 문맥을 이해하고 분류하는 핵심 단계입니다.
+학습·벤치마크·추천 실행에는 Git 저장소에 포함되지 않은 전처리 데이터가 필요합니다.
 
-* **`llm_keyword_extraction.py`**
-    * **기능:** GPT-4o-mini를 사용하여 각 논문의 제목과 초록에서 핵심 키워드(Feature) 5개를 추출합니다.
-    * **특징:** `asyncio`를 활용한 비동기 처리로 대량의 데이터를 빠르게 처리하며, 중간 저장 및 에러 핸들링 로직이 포함되어 있습니다.
-* **`llm_pred_label.py`**
-    * **기능:** LLM이 논문의 제목/초록뿐만 아니라 **'인용된 이웃 논문들의 카테고리 분포(Graph Context)'**를 참고하여 논문의 카테고리를 예측합니다.
-    * **특징:** 단순 분류를 넘어 그래프 정보를 프롬프트에 주입(Context Injection)했을 때의 정확도 향상을 실험합니다.
-* **`cost_measure.py`**
-    * **기능:** 전체 데이터를 처리하기 전, 샘플 데이터를 통해 LLM API의 예상 비용(토큰 사용량)을 산출합니다.
-* **`lable_check.py` / `num_lable.py`**
-    * **기능:** 데이터셋의 레이블 분포를 확인하고 매핑 정보를 검증하는 데이터 무결성 검사 도구입니다.
+- [전처리 데이터 다운로드(Google Drive)](https://drive.google.com/file/d/1MjrUjslFcvrxOJ9gB77AvpBvvzXvoNom/view?usp=sharing)
 
-### 3. Prototype & Modeling (`code/prototype/`)
-구축된 데이터를 바탕으로 실제 추천 알고리즘을 수행하고 평가합니다.
+압축을 푼 뒤 프로젝트 루트의 `subdataset/` 및 `output/`에 파일을 배치합니다. 주요 필수 파일은 다음과 같습니다.
 
-* **`data1(llm).py` (메인 모델)**
-    * **기능:** **Content-Aware Matrix Factorization** 모델을 구현하여 논문을 추천합니다.
-    * **구조:** `User Embedding` + `Item Embedding` + **`LLM Keyword Embedding`**을 결합한 하이브리드 구조입니다.
-    * **실행:** 모델 학습 후, 인터랙티브 모드로 진입하여 랜덤한 유저를 선택하고 실제 추천 결과를 실시간으로 확인할 수 있습니다.
-* **`data1(TF-IDF).py` (베이스라인)**
-    * **기능:** LLM 대신 TF-IDF로 추출한 키워드를 사용하는 베이스라인 모델입니다. LLM 기반 모델과의 성능 비교를 위해 사용됩니다.
+```text
+subdataset/
+├── arxiv_master_final.json
+└── build_hetero_graph_v2.pt
+output/
+├── knowledge_meta.json
+└── knowledge_meta_embeddings.pt   # 자연어 추천 v2 사용 시
+```
 
-## 📁 프로젝트 구조 (Directory Structure)
+벤치마크를 실행하면 모델 가중치는 `output/benchmark/`에 생성됩니다.
+
+### 환경 변수
+
+Docker Compose 실행 설정은 프로젝트 루트의 `.env`에서 변경할 수 있습니다.
+
+```dotenv
+DASHBOARD_PORT=8080
+OPENAI_API_KEY=
+GITHUB_TOKEN=
+GITHUB_REPOSITORY=YHFTF/arxiv-conversational-recommender
+REQUIRE_GPU=true
+OUTPUT_STORAGE_PATH=./output
+ARTIFACT_STORAGE_PATH=
+```
+
+- `OPENAI_API_KEY`: LLM 전처리, 메타 임베딩 생성, 자연어 추천에 필요합니다.
+- `GITHUB_TOKEN`: 비공개 저장소의 GitHub 이슈를 대시보드에서 조회할 때 필요합니다.
+- `REQUIRE_GPU`: 기본값은 `true`이며, CUDA GPU가 없으면 대시보드의 학습·벤치마크 실행을 차단합니다. CPU 실행을 허용하려면 `false`로 설정합니다.
+- `OUTPUT_STORAGE_PATH`: Docker와 호스트가 함께 사용할 결과 디렉터리입니다. Google Drive·NAS처럼 호스트에 마운트된 경로도 지정할 수 있습니다.
+- `ARTIFACT_STORAGE_PATH`: 대시보드에서 가져오기/내보내기를 수행할 외부 저장소의 컨테이너 내부 경로입니다. 저장소가 준비되기 전에는 비워 둡니다.
+
+Python 스크립트를 직접 실행할 때는 현재 셸에도 API 키를 설정합니다.
+
+```powershell
+# Windows PowerShell
+$env:OPENAI_API_KEY="sk-..."
+```
 
 ```bash
-root/
+# macOS/Linux
+export OPENAI_API_KEY="sk-..."
+```
+
+### 실행 확인 및 종료
+
+```powershell
+docker compose -f docker-compose.dashboard.yml ps
+docker compose -f docker-compose.dashboard.yml down
+```
+
+팀 메모는 Docker의 `dashboard-data` 볼륨에 보존됩니다.
+
+## 다른 설치 방법
+
+### Docker로 직접 실행
+
+```bash
+docker compose -f docker-compose.dashboard.yml up -d
+```
+
+NVIDIA GPU를 학습 컨테이너에 연결하려면 NVIDIA Container Toolkit이 설치된 환경에서 GPU 오버레이를 함께 사용합니다.
+
+```bash
+docker compose -f docker-compose.dashboard.yml -f docker-compose.gpu.yml up -d
+```
+
+### Python 개발 환경
+
+Python 3.11 환경을 권장합니다. 먼저 운영체제와 CUDA 버전에 맞는 PyTorch를 설치한 뒤 공통 의존성을 설치합니다.
+
+```bash
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS/Linux
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install torch
+python -m pip install -r requirements.txt
+```
+
+CUDA 12.4 Linux 환경에서는 저장소에 고정된 Docker용 의존성을 사용할 수 있습니다.
+
+```bash
+python -m pip install -r requirements-docker.txt
+```
+
+대시보드만 로컬에서 실행하려면:
+
+```bash
+python -u dashboard/server.py
+```
+
+## 주요 실행 방법
+
+모든 명령은 프로젝트 루트에서 실행합니다.
+
+### V4 지식 그래프 모델 학습
+
+```bash
+python code/model/train_v4_knowledge_bpr.py
+```
+
+학습된 가중치는 `output/lightgcn_v4_knowledge_bpr.pt`에 저장됩니다. 이 스크립트는 100 epoch 동안 학습하며 CUDA가 없으면 CPU를 사용합니다.
+
+### 통합 벤치마크 v2
+
+```bash
+python code/test/run_benchmark_v2.py
+```
+
+다음 5개 모델을 동일한 분할에서 비교합니다.
+
+- BPR-MF
+- GCN + BPR
+- GraphSAGE + BPR
+- LightGCN (BPR)
+- LightGCN + Knowledge (Ours)
+
+벤치마크 v2는 학습 그래프에서 콜드 스타트 논문의 모든 연결을 격리한 뒤 Recall@20과 NDCG@20을 평가합니다. 특정 모델만 실행하거나 기존 가중치를 무시하려면 다음 옵션을 사용합니다.
+
+```bash
+python code/test/run_benchmark_v2.py --only "LightGCN + Knowledge (Ours)"
+python code/test/run_benchmark_v2.py --force-retrain
+```
+
+결과 JSON과 모델 가중치는 `output/benchmark/`에 저장됩니다.
+
+### 자연어 논문 추천 v2
+
+자연어 질의에서 Domain·Task·Method를 추출하고, 메타데이터 사전과 시맨틱 매칭한 뒤 V4 지식 임베딩 공간에서 논문을 추천합니다.
+
+```bash
+python code/test/run_nl_inference_v2.py --top_k 5 --threshold 0.35
+```
+
+필요 조건:
+
+- `OPENAI_API_KEY`
+- `output/knowledge_meta_embeddings.pt`
+- 벤치마크 v2가 만든 `output/benchmark/benchmark_lightgcn__knowledge_(ours)_v2.pt`
+
+메타 임베딩 파일이 없다면 아래 명령으로 생성할 수 있습니다. OpenAI Embeddings API 비용이 발생합니다.
+
+```bash
+python code/test/word_embedding.py
+```
+
+### 제목 기반 추천
+
+```bash
+python code/test/run_inference.py --query "graph neural network" --top_k 5
+```
+
+이 명령은 `run_benchmark.py`가 만든 해당 모델 가중치를 사용합니다.
+
+## 대시보드 기능
+
+- 현재 브랜치, 최근 커밋, 변경 파일 확인
+- GitHub 이슈 조회
+- 팀 메모 작성 및 보관
+- 프로젝트 문서 조회
+- V4 학습과 통합 벤치마크 작업 실행 및 로그 확인
+- 학습 6개 버전과 벤치마크 2개 버전 선택 실행
+- 새로 추가된 `code/**/*.py` 자동 탐색 및 컨테이너 실행
+- 브랜치별 커밋 확인, 작업 브랜치 전환 및 Pull
+- 파일시스템 기반 외부 Output 저장소 가져오기/내보내기
+
+현재 자연어 추천 항목은 대화형 CLI만 제공하며, 대시보드의 실사용 추천 UI는 구현 예정입니다.
+
+## 프로젝트 구조
+
+```text
+.
 ├── code/
-│   ├── data_collection/
-│   │   ├── loader.py              # 원본 데이터 로드
-│   │   ├── forest_fire.py         # 그래프 샘플링
-│   │   ├── author_mapper.py       # OpenAlex API 저자 수집
-│   │   └── user_generator_v2.py   # 유저-아이템 상호작용 생성
-│   ├── data_analysis/
-│   │   └── llm_keyword_extraction.py # LLM 키워드 추출 (Async)
-│   └── prototype/
-│       └── test_with_partial_data.py # 추천 모델 학습 및 인터랙티브 테스트
-├── dataset/
-│   └── ogbn_arxiv/                # 원본 데이터셋
-├── subdataset/
-│   └── ogbn_arxiv_16k_ffs_sample.pt # 샘플링된 데이터
-├── output/
-│   ├── llm_extraction_results.json  # LLM 추출 결과
-│   ├── final_user_interactions.csv  # 학습용 데이터
-│   └── author_data_openalex.json    # 저자 정보
-├── .env                           # API Key 설정
-└── requirements.txt
+│   ├── data_collection/     # 샘플링, 저자·인용 데이터 수집
+│   ├── data_analysis/       # LLM 지식 추출과 비용 산정
+│   ├── model/               # LightGCN 모델, 학습 및 기존 추론
+│   ├── scripts/             # 이종 그래프 생성과 데이터 검사
+│   └── test/                # 벤치마크, 자연어 추천, 베이스라인
+├── dashboard/               # 팀 대시보드 서버와 정적 UI
+├── docs/                    # 모델 및 실험 문서
+├── colab/                   # Colab 벤치마크/워크벤치 노트북
+├── subdataset/              # 전처리 그래프와 논문 메타데이터(별도 다운로드)
+├── output/                  # 지식 사전, 임베딩, 모델 가중치와 결과
+├── docker-compose.dashboard.yml
+├── docker-compose.gpu.yml
+└── setup.bat
 ```
 
-## ⚙️ 설치 및 환경 설정 (Installation)
+## 모델 개요
 
-1.  **필수 라이브러리 설치:**
+V4 모델은 논문 인용 그래프뿐 아니라 다음 정보를 하나의 추천 공간에 반영합니다.
 
-    ```bash
-    pip install torch pandas numpy openai python-dotenv scikit-learn tqdm aiohttp
-    ```
+- 논문–논문 인용 관계
+- 저자–논문 작성 관계
+- 논문–토픽 관계
+- LLM이 추출한 Domain·Task·Method 지식 임베딩
 
-2.  **환경 변수 설정 (.env):**
-    프로젝트 루트에 `.env` 파일을 생성하고 OpenAI API 키를 입력하세요.
+벤치마크 v2는 일반 테스트와 별도로 전체 논문의 10%를 콜드 스타트 노드로 선정하고, 관련 에지를 학습 그래프에서 제거해 신규 논문 추천 성능을 측정합니다.
 
-    ```text
-    OPENAI_API_KEY=sk-proj-your-api-key-here...
-    ```
+## 데이터 파이프라인
 
-## 🏃‍♂️ 실행 가이드 (Usage)
+전처리 데이터를 새로 만들 때의 주요 단계는 다음과 같습니다.
 
-### 1\. 데이터 파이프라인 구축
+1. `code/data_collection/forest_fire.py`: OGBN-Arxiv 그래프를 약 1.6만 노드로 샘플링
+2. `code/data_collection/author_mapper.py`: OpenAlex에서 저자 정보 수집
+3. `code/data_analysis/llm_keyword_extraction.py`: 제목과 초록에서 LLM 지식 추출
+4. `code/data_collection/author_paper_edges.py`, `paper_paper_edge.py`: 그래프 에지 생성
+5. `code/scripts/build_hetero_garaph_v2.py`: V4용 이종 그래프와 지식 사전 생성
 
-데이터 수집부터 전처리까지 순서대로 실행합니다. (구글 드라이브 데이터를 다운로드했다면 생략 가능)
+전체 파이프라인은 OGB 원본 데이터, OpenAlex/OpenAI 네트워크 호출, API 키와 비용이 필요합니다. 모델 실험만 하려면 위의 전처리 데이터를 내려받아 사용하는 편이 간단합니다.
 
-```bash
-# 1. 그래프 샘플링
-python code/data_collection/forest_fire.py
+## 문제 해결
 
-# 2. 저자 정보 매핑 (OpenAlex)
-python code/data_collection/author_mapper_openalex.py
-
-# 3. LLM 키워드 추출 (가장 중요)
-python code/data_analysis/llm_keyword_extraction.py
-
-# 4. 학습용 데이터셋 생성
-python code/data_collection/user_generator_v2.py
-```
-
-### 2\. 모델 학습 및 테스트
-
-추천 모델을 학습시키고, 대화형 인터페이스로 추천 결과를 확인합니다.
-
-```bash
-python code/prototype/test_with_partial_data.py
-```
-
-  * 학습이 완료되면 `Enter` 키를 눌러 랜덤한 저자를 선택하고 추천 논문을 확인할 수 있습니다.
-  * 종료하려면 `Ctrl+C`를 입력하세요.
-
-## 📊 모델 성능 예시
-
-**Target User:** Anton van den Hengel (Computer Vision 연구자)
-
-  * **실제 관심사:** Visual Question Answering, Semantic Segmentation
-  * **추천 결과:**
-    1.  Image Denoising using Encoder-Decoder (Score: 61.9%)
-    2.  Classification of Distorted Images (Score: 9.7%)
-  * **분석:** 컴퓨터 비전 및 딥러닝 아키텍처와 관련된 논문을 정확하게 추천하며, 관련 없는 분야(게임, 텍스트 등)는 낮은 점수로 필터링함.
+- 대시보드가 열리지 않으면 `docker compose -f docker-compose.dashboard.yml logs dashboard`로 로그를 확인합니다.
+- 학습 버튼에서 CUDA 오류가 나면 GPU 오버레이와 NVIDIA Container Toolkit 설정을 확인하거나 `.env`에서 `REQUIRE_GPU=false`로 CPU 실행을 허용합니다.
+- `FileNotFoundError`가 발생하면 `subdataset/`과 `output/`의 필수 파일 경로를 확인합니다.
+- 자연어 추천에서 가중치를 찾지 못하면 먼저 `run_benchmark_v2.py`를 실행합니다.
+- `setup.bat`의 이미지 pull이 실패하면 GHCR 패키지가 공개 상태인지, 또는 `ghcr.io` 로그인이 필요한지 확인합니다.

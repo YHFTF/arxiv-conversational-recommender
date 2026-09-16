@@ -26,7 +26,11 @@
 DASHBOARD_PORT=8080
 OPENAI_API_KEY=
 GITHUB_TOKEN=
+OUTPUT_STORAGE_PATH=./output
+ARTIFACT_STORAGE_PATH=
 ```
+
+`OUTPUT_STORAGE_PATH`는 로컬 폴더뿐 아니라 Google Drive 또는 NAS처럼 호스트에 마운트된 공유 경로로 지정할 수 있습니다. 외부 저장소가 준비되면 해당 경로를 컨테이너에 마운트하고 `ARTIFACT_STORAGE_PATH`에 컨테이너 내부 경로를 설정해 대시보드에서 가져오기/내보내기를 사용할 수 있습니다.
 
 중지할 때는 프로젝트 폴더에서 다음 명령을 실행합니다.
 

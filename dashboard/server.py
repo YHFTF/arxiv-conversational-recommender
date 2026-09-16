@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import urllib.error
@@ -38,25 +39,41 @@ DATA = Path(
 
 NOTES = DATA / "notes.json"
 
+OUTPUT = Path(
+    os.getenv("OUTPUT_DIR", ROOT / "output")
+).resolve()
+
+ARTIFACT_STORAGE = os.getenv("ARTIFACT_STORAGE_PATH", "").strip()
+
 
 TASKS = {
     "train": {
-        "label": "V4 지식 그래프 모델 학습",
-        "description": "Knowledge BPR 모델을 100 epoch 학습합니다.",
-        "command": [
-            "python",
-            "-u",
-            "code/model/train_v4_knowledge_bpr.py",
-        ],
+        "label": "모델 학습",
+        "description": "선택한 LightGCN 버전을 학습합니다.",
+        "default": "v4_knowledge_bpr",
+        "variants": {
+            "v1": ("V1 LightGCN", "code/model/train.py"),
+            "v1_split": ("V1 Split", "code/model/train_split.py"),
+            "v2": ("V2 LightGCN", "code/model/train_v2.py"),
+            "v2_split": ("V2 Split", "code/model/train_v2_split.py"),
+            "v3_bpr": ("V3 BPR", "code/model/train_v3_bpr.py"),
+            "v4_knowledge_bpr": (
+                "V4 Knowledge BPR",
+                "code/model/train_v4_knowledge_bpr.py",
+            ),
+        },
     },
     "benchmark": {
-        "label": "통합 벤치마크 v2",
-        "description": "5개 모델의 추천 성능을 비교합니다.",
-        "command": [
-            "python",
-            "-u",
-            "code/test/run_benchmark_v2.py",
-        ],
+        "label": "통합 벤치마크",
+        "description": "선택한 평가 방식으로 모델 성능을 비교합니다.",
+        "default": "v2_zero_leakage",
+        "variants": {
+            "v1": ("V1 통합 벤치마크", "code/test/run_benchmark.py"),
+            "v2_zero_leakage": (
+                "V2 Zero-Leakage",
+                "code/test/run_benchmark_v2.py",
+            ),
+        },
     },
     "inference": {
         "label": "자연어 추천",
@@ -126,6 +143,76 @@ def gpu_available() -> bool:
     return code == 0 and stdout == "1"
 
 
+def discover_scripts() -> list[dict]:
+    """Discover runnable Python files from the mounted working tree."""
+
+    scripts = []
+
+    for path in sorted((ROOT / "code").rglob("*.py")):
+        if path.name == "__init__.py" or "__pycache__" in path.parts:
+            continue
+
+        scripts.append(
+            {
+                "path": path.relative_to(ROOT).as_posix(),
+                "name": path.stem,
+                "group": path.parent.relative_to(ROOT / "code").as_posix(),
+            }
+        )
+
+    return scripts
+
+
+def resolve_script(relative_path: str) -> Path | None:
+    """Resolve a discovered script without allowing path traversal."""
+
+    target = (ROOT / relative_path).resolve()
+    code_root = (ROOT / "code").resolve()
+
+    if (
+        target.suffix != ".py"
+        or not target.is_file()
+        or code_root not in target.parents
+    ):
+        return None
+
+    return target
+
+
+def storage_info() -> dict:
+    """Describe the optional shared artifact directory."""
+
+    external = Path(ARTIFACT_STORAGE).resolve() if ARTIFACT_STORAGE else None
+
+    return {
+        "configured": external is not None,
+        "output": str(OUTPUT),
+        "external": str(external) if external else "",
+        "external_exists": bool(external and external.exists()),
+    }
+
+
+def copy_artifacts(source: Path, destination: Path) -> int:
+    """Copy artifact files while preserving their relative paths."""
+
+    if not source.exists():
+        raise FileNotFoundError(str(source))
+
+    destination.mkdir(parents=True, exist_ok=True)
+    copied = 0
+
+    for path in source.rglob("*"):
+        if not path.is_file():
+            continue
+
+        target = destination / path.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+        copied += 1
+
+    return copied
+
+
 # ---------------------------------------------------------------------
 # Git
 # ---------------------------------------------------------------------
@@ -154,7 +241,7 @@ def git_info() -> dict:
             "git",
             "remote",
             "get-url",
-            "main",
+            "origin",
         ]
     )
 
@@ -202,6 +289,56 @@ def git_info() -> dict:
         "branches": branches,
         "error": git_error,
     }
+
+
+def branch_commits(branch: str) -> tuple[int, list[dict], str]:
+    """Return recent commits for an existing local or remote branch."""
+
+    valid_names = {item["name"] for item in git_info()["branches"]}
+
+    if branch not in valid_names:
+        return 1, [], "존재하지 않는 브랜치입니다."
+
+    code, output, error = run(
+        [
+            "git",
+            "log",
+            branch,
+            "-20",
+            "--pretty=format:%h%x1f%an%x1f%aI%x1f%s%x1e",
+        ]
+    )
+
+    return code, parse_git_commits(output), error
+
+
+def switch_branch(branch: str) -> tuple[int, str]:
+    """Switch to a known branch, creating a local tracking branch if needed."""
+
+    info = git_info()
+    valid_names = {item["name"] for item in info["branches"]}
+
+    if branch not in valid_names:
+        return 1, "존재하지 않는 브랜치입니다."
+
+    if info["dirty"]:
+        return 1, "미커밋 변경이 있어 브랜치를 전환할 수 없습니다."
+
+    if branch.startswith("origin/"):
+        local_name = branch.split("/", 1)[1]
+        local_names = {
+            name for name in valid_names if not name.startswith("origin/")
+        }
+        command = (
+            ["git", "switch", local_name]
+            if local_name in local_names
+            else ["git", "switch", "--track", branch]
+        )
+    else:
+        command = ["git", "switch", branch]
+
+    code, stdout, stderr = run(command, timeout=90)
+    return code, stdout or stderr
 
 
 def parse_git_commits(raw: str) -> list[dict]:
@@ -701,6 +838,7 @@ def worker(
         process = subprocess.Popen(
             command,
             cwd=ROOT,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -827,6 +965,14 @@ class Handler(SimpleHTTPRequestHandler):
                 git_info()
             )
 
+        if path == "/api/git/commits":
+            branch = parse_qs(parsed_url.query).get("branch", [""])[0]
+            code, commits, error = branch_commits(branch)
+            return self.send_json(
+                {"branch": branch, "commits": commits, "error": error},
+                200 if code == 0 else 404,
+            )
+
         if path == "/api/issues":
             return self.send_json(
                 issue_data()
@@ -852,6 +998,12 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path == "/api/tasks":
             return self.handle_tasks_request()
+
+        if path == "/api/scripts":
+            return self.send_json({"scripts": discover_scripts()})
+
+        if path == "/api/storage":
+            return self.send_json(storage_info())
 
         if path.startswith("/api/jobs/"):
             return self.handle_job_request(
@@ -883,12 +1035,21 @@ class Handler(SimpleHTTPRequestHandler):
             )
 
         if self.path == "/api/git/pull":
-            return self.handle_git_pull()
+            return self.handle_git_pull(data)
+
+        if self.path == "/api/git/switch":
+            return self.handle_git_switch(data)
+
+        if self.path == "/api/scripts/run":
+            return self.handle_run_script(data)
+
+        if self.path == "/api/storage/sync":
+            return self.handle_storage_sync(data)
 
         if self.path.startswith(
             "/api/tasks/"
         ):
-            return self.handle_start_task()
+            return self.handle_start_task(data)
 
         return self.send_json(
             {
@@ -951,14 +1112,19 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_tasks_request(self) -> None:
         """Return task metadata and recent jobs."""
 
-        task_data = {
-            key: {
+        task_data = {}
+
+        for key, task in TASKS.items():
+            public_task = {
                 name: value
                 for name, value in task.items()
-                if name != "command"
+                if name not in {"command", "variants"}
             }
-            for key, task in TASKS.items()
-        }
+            public_task["variants"] = [
+                {"id": variant_id, "label": value[0], "path": value[1]}
+                for variant_id, value in task.get("variants", {}).items()
+            ]
+            task_data[key] = public_task
 
         with jobs_lock:
             recent_jobs = list(
@@ -1043,8 +1209,22 @@ class Handler(SimpleHTTPRequestHandler):
             201,
         )
 
-    def handle_git_pull(self) -> None:
-        """Run git pull --ff-only."""
+    def handle_git_pull(self, data: dict) -> None:
+        """Pull the selected branch with fast-forward-only semantics."""
+
+        branch = str(data.get("branch", "")).strip()
+
+        fetch_code, _, fetch_error = run(
+            ["git", "fetch", "origin", "--prune"],
+            timeout=90,
+        )
+        if fetch_code != 0:
+            return self.send_json({"error": fetch_error}, 409)
+
+        if branch and branch != git_info()["branch"]:
+            code, message = switch_branch(branch)
+            if code != 0:
+                return self.send_json({"error": message}, 409)
 
         code, stdout, stderr = run(
             [
@@ -1065,7 +1245,83 @@ class Handler(SimpleHTTPRequestHandler):
             200 if code == 0 else 409,
         )
 
-    def handle_start_task(self) -> None:
+    def handle_git_switch(self, data: dict) -> None:
+        """Switch the dashboard working tree to a selected branch."""
+
+        branch = str(data.get("branch", "")).strip()
+        code, output = switch_branch(branch)
+        return self.send_json(
+            {"ok": code == 0, "output": output, "branch": git_info()["branch"]},
+            200 if code == 0 else 409,
+        )
+
+    def start_job(self, task_key: str, label: str, command: list[str]) -> None:
+        """Create and start one background process."""
+
+        job_id = uuid.uuid4().hex[:12]
+        job = {
+            "id": job_id,
+            "task": task_key,
+            "label": label,
+            "command": command,
+            "status": "queued",
+            "created_at": now(),
+            "log": [],
+        }
+
+        with jobs_lock:
+            jobs[job_id] = job
+
+        threading.Thread(
+            target=worker,
+            args=(job_id, command),
+            daemon=True,
+        ).start()
+
+        return self.send_json(job, 202)
+
+    def handle_run_script(self, data: dict) -> None:
+        """Run a Python script discovered from the mounted code directory."""
+
+        relative_path = str(data.get("path", "")).strip()
+        script = resolve_script(relative_path)
+
+        if script is None:
+            return self.send_json({"error": "실행 가능한 스크립트가 아닙니다."}, 400)
+
+        return self.start_job(
+            "script",
+            f"스크립트: {relative_path}",
+            ["python", "-u", relative_path],
+        )
+
+    def handle_storage_sync(self, data: dict) -> None:
+        """Synchronize output with a configured filesystem-backed store."""
+
+        if not ARTIFACT_STORAGE:
+            return self.send_json(
+                {"error": "ARTIFACT_STORAGE_PATH가 설정되지 않았습니다."},
+                409,
+            )
+
+        direction = str(data.get("direction", "pull"))
+        external = Path(ARTIFACT_STORAGE).resolve()
+
+        try:
+            if direction == "pull":
+                copied = copy_artifacts(external, OUTPUT)
+            elif direction == "push":
+                copied = copy_artifacts(OUTPUT, external)
+            else:
+                return self.send_json({"error": "잘못된 동기화 방향입니다."}, 400)
+        except OSError as error:
+            return self.send_json({"error": str(error)}, 409)
+
+        return self.send_json(
+            {"ok": True, "direction": direction, "files": copied}
+        )
+
+    def handle_start_task(self, data: dict) -> None:
         """Start one configured background task."""
 
         task_key = self.path.rsplit(
@@ -1094,6 +1350,13 @@ class Handler(SimpleHTTPRequestHandler):
                 409,
             )
 
+        variants = task.get("variants", {})
+        variant_id = str(data.get("variant") or task.get("default", ""))
+        variant = variants.get(variant_id)
+
+        if not variant:
+            return self.send_json({"error": "지원하지 않는 실행 버전입니다."}, 400)
+
         require_gpu = (
             os.getenv(
                 "REQUIRE_GPU",
@@ -1117,34 +1380,10 @@ class Handler(SimpleHTTPRequestHandler):
                 409,
             )
 
-        job_id = uuid.uuid4().hex[:12]
-
-        job = {
-            "id": job_id,
-            "task": task_key,
-            "label": task["label"],
-            "status": "queued",
-            "created_at": now(),
-            "log": [],
-        }
-
-        with jobs_lock:
-            jobs[job_id] = job
-
-        thread = threading.Thread(
-            target=worker,
-            args=(
-                job_id,
-                task["command"],
-            ),
-            daemon=True,
-        )
-
-        thread.start()
-
-        return self.send_json(
-            job,
-            202,
+        return self.start_job(
+            task_key,
+            variant[0],
+            ["python", "-u", variant[1]],
         )
 
 

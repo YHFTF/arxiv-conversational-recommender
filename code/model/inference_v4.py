@@ -8,9 +8,10 @@ sys.path.append(os.path.join(project_root, 'code', 'model'))
 from LGCmodel_v4 import ArxivLightGCNV4
 
 GRAPH_PATH = os.path.join(project_root, 'subdataset', 'build_hetero_graph_v2.pt')
-MODEL_PATH = os.path.join(project_root, 'output', 'lightgcn_v4_knowledge_bpr.pt')
+output_dir = os.path.abspath(os.getenv('OUTPUT_DIR', os.path.join(project_root, 'output')))
+MODEL_PATH = os.path.join(output_dir, 'lightgcn_v4_knowledge_bpr.pt')
 MASTER_FILE = os.path.join(project_root, 'subdataset', 'arxiv_master_final.json')
-META_PATH = os.path.join(project_root, 'output', 'knowledge_meta.json')
+META_PATH = os.path.join(output_dir, 'knowledge_meta.json')
 
 def recommend_v4(target_title, top_k=5):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

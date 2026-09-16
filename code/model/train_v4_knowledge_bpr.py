@@ -11,9 +11,10 @@ from LGCmodel_v4 import ArxivLightGCNV4
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 GRAPH_PATH = os.path.join(project_root, 'subdataset', 'build_hetero_graph_v2.pt')
-META_PATH = os.path.join(project_root, 'output', 'knowledge_meta.json')
+output_dir = os.path.abspath(os.getenv('OUTPUT_DIR', os.path.join(project_root, 'output')))
+META_PATH = os.path.join(output_dir, 'knowledge_meta.json')
 MASTER_FILE = os.path.join(project_root, 'subdataset', 'arxiv_master_final.json')
-SAVE_PATH = os.path.join(project_root, 'output', 'lightgcn_v4_knowledge_bpr.pt')
+SAVE_PATH = os.path.join(output_dir, 'lightgcn_v4_knowledge_bpr.pt')
 
 def evaluate_ranking_all_papers(out, edges, num_papers, k=20, batch_size=4096):
     src, pos_dst = edges[0], edges[1]

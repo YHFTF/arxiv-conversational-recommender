@@ -21,4 +21,6 @@ $env:INSTALL_ML_DEPS='false'
 docker compose -f docker-compose.dashboard.yml up --build
 ```
 
-선택 환경 변수는 `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `OPENAI_API_KEY`, `DASHBOARD_PORT`입니다. 팀 메모는 `dashboard-data` 볼륨에 유지됩니다. Pull은 `--ff-only`로 실행합니다.
+선택 환경 변수는 `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `OPENAI_API_KEY`, `DASHBOARD_PORT`, `OUTPUT_STORAGE_PATH`, `ARTIFACT_STORAGE_PATH`입니다. 팀 메모는 `dashboard-data` 볼륨에 유지됩니다. Pull은 `--ff-only`로 실행합니다.
+
+`OUTPUT_STORAGE_PATH`에는 호스트, Google Drive 또는 NAS에 마운트된 공유 결과 폴더를 지정할 수 있습니다. 대시보드는 `code/**/*.py`를 새로고침할 때마다 다시 탐색하므로 새 스크립트를 위해 이미지를 재빌드할 필요가 없습니다. 브랜치 전환은 미커밋 변경이 없는 경우에만 허용됩니다.

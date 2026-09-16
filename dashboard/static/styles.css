@@ -641,11 +641,70 @@ dialog::backdrop {
 
 .branch-row {
     border-top: 1px solid var(--line);
-    padding: 12px
+    padding: 12px;
+    display: grid;
+    grid-template-columns: minmax(130px, auto) 1fr auto;
+    gap: 10px;
+    align-items: center
 }
 
 .branch-row code {
     color: var(--cyan)
+}
+
+.branch-row button,
+.control-row button {
+    background: #171d28;
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 9px 12px
+}
+
+.branch-commit {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 3px 12px;
+    border-top: 1px solid var(--line);
+    padding: 10px 0
+}
+
+.branch-commit small {
+    color: var(--muted)
+}
+
+.branch-commit code {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    color: var(--cyan)
+}
+
+.operations {
+    margin-top: 16px
+}
+
+.operations p {
+    color: var(--muted)
+}
+
+.operations pre {
+    height: 210px;
+    overflow: auto;
+    background: #080b10;
+    border: 1px solid var(--line);
+    padding: 14px;
+    white-space: pre-wrap
+}
+
+.control-row {
+    display: flex;
+    gap: 8px;
+    margin: 15px 0
+}
+
+.control-row select {
+    min-width: 0;
+    flex: 1;
+    padding: 9px
 }
 
 @media(max-width:950px) {

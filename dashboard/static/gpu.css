@@ -5,7 +5,8 @@
 }
 
 .task-actions button,
-.task-actions a {
+.task-actions a,
+.task-actions select {
     width: 210px;
     margin: 0;
     padding: 12px;
@@ -13,6 +14,13 @@
     text-align: center;
     font-weight: 750;
     text-decoration: none
+}
+
+.task-actions select,
+.control-row select {
+    background: #0b1018;
+    color: var(--text);
+    border: 1px solid #465165
 }
 
 .task-actions button {
@@ -32,7 +40,8 @@
     }
 
     .task-actions button,
-    .task-actions a {
+    .task-actions a,
+    .task-actions select {
         width: 100%
     }
 }

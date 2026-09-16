@@ -89,12 +89,28 @@
                 </nav>
                 <article id="markdown">문서를 선택하세요.</article>
             </div>
+            <div class="two operations">
+                <article>
+                    <label>LIVE SCRIPT RUNNER</label>
+                    <h3>컨테이너 코드 실행</h3>
+                    <p>새로고침하면 현재 작업 트리의 Python 파일을 다시 탐색합니다.</p>
+                    <div class="control-row"><select id="script-select"></select><button id="run-script">실행 ▶</button></div>
+                    <div class="head"><small id="script-status">스크립트를 불러오는 중…</small><em id="script-job-status">대기 중</em></div>
+                    <pre id="script-log">$ 실행할 파일을 선택하세요.</pre>
+                </article>
+                <article>
+                    <label>SHARED ARTIFACTS</label>
+                    <h3>Output 외부 저장소</h3>
+                    <p id="storage-status">저장소 설정을 확인하는 중…</p>
+                    <div class="control-row"><button id="storage-pull">외부 → Output</button><button id="storage-push">Output → 외부</button></div>
+                </article>
+            </div>
         </section>
         <section id="learn" class="page task">
             <div class="task-hero purple"><label>MODEL LAB / TRAIN</label>
                 <h2>지식 그래프 모델 학습</h2>
                 <p>Domain · Task · Method 지식과 인용 그래프를 결합해 LightGCN을 학습합니다.</p>
-                <div class="task-actions"><button data-task="train">로컬 GPU 학습 ▶</button><a class="colab-button"
+                <div class="task-actions"><select data-task-version="train"></select><button data-task="train">로컬 GPU 학습 ▶</button><a class="colab-button"
                         data-colab href="#">Colab에서 실행 ↗</a></div>
             </div>
             <div class="two">
@@ -119,7 +135,7 @@
             <div class="task-hero cyan"><label>MODEL LAB / EVALUATE</label>
                 <h2>Zero-Leakage 벤치마크</h2>
                 <p>다섯 모델의 일반 추천 및 신규 논문 추천 성능을 공정하게 비교합니다.</p>
-                <div class="task-actions"><button data-task="benchmark">로컬 GPU 벤치마크 ▶</button><a class="colab-button"
+                <div class="task-actions"><select data-task-version="benchmark"></select><button data-task="benchmark">로컬 GPU 벤치마크 ▶</button><a class="colab-button"
                         data-colab href="#">Colab에서 실행 ↗</a></div>
             </div>
             <div class="models"><span>BPR-MF</span><span>GCN +
@@ -143,7 +159,10 @@
     <div id="toast"></div>
     <dialog id="modal"><button id="close">×</button><label>GIT REFERENCES</label>
         <h2>브랜치</h2>
+        <p>브랜치를 선택하면 해당 개발 내역을 확인하고 작업 브랜치를 변경할 수 있습니다.</p>
         <div id="branch-list"></div>
+        <h3 id="branch-history-title">개발 내역</h3>
+        <div id="branch-history"></div>
     </dialog>
     <script src="/app.js"></script>
 </body>

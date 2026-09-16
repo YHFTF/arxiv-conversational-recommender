@@ -269,7 +269,7 @@ async function pullGit() {
       '/api/git/pull',
       {
         method: 'POST',
-        body: '{}',
+        body: JSON.stringify({ branch: gitState.branch }),
       },
     );
 
@@ -293,21 +293,64 @@ function openBranchModal() {
       .map(
         (branch) => `
           <div class="branch-row">
-            <code>
-              ${escapeHtml(branch.name)}
-            </code>
+            <button data-branch-history="${escapeHtml(branch.name)}"><code>${escapeHtml(branch.name)}</code></button>
 
             <small>
               ${escapeHtml(branch.hash)}
               ·
               ${escapeHtml(branch.message)}
             </small>
+            <button data-branch-switch="${escapeHtml(branch.name)}">전환</button>
           </div>
         `,
       )
       .join('');
 
+  $$('[data-branch-history]').forEach((button) => {
+    button.onclick = () => loadBranchHistory(button.dataset.branchHistory);
+  });
+
+  $$('[data-branch-switch]').forEach((button) => {
+    button.onclick = () => changeBranch(button.dataset.branchSwitch);
+  });
+
   $('#modal').showModal();
+
+  loadBranchHistory(gitState.branch);
+}
+
+
+async function loadBranchHistory(branch) {
+  try {
+    const data = await api(`/api/git/commits?branch=${encodeURIComponent(branch)}`);
+    $('#branch-history-title').textContent = `${branch} 개발 내역`;
+    const container = $('#branch-history');
+    container.innerHTML = '';
+    data.commits.forEach((commit) => {
+      const row = document.createElement('div');
+      row.className = 'branch-commit';
+      row.innerHTML = `<b>${escapeHtml(commit.message)}</b><small>${escapeHtml(commit.author)} · ${formatRelativeTime(commit.date)}</small><code>${escapeHtml(commit.hash)}</code>`;
+      container.appendChild(row);
+    });
+    if (!data.commits.length) container.textContent = '커밋이 없습니다.';
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+
+async function changeBranch(branch) {
+  try {
+    const result = await api('/api/git/switch', {
+      method: 'POST',
+      body: JSON.stringify({ branch }),
+    });
+    showToast(result.output || `${result.branch}(으)로 전환했습니다.`);
+    $('#modal').close();
+    refreshAll();
+  } catch (error) {
+    showToast(error.message, true);
+  }
 }
 
 
@@ -740,6 +783,23 @@ async function openDoc(button) {
 // Tasks / Jobs
 // ============================================================
 
+async function loadTasks() {
+  try {
+    const data = await api('/api/tasks');
+
+    Object.entries(data.tasks).forEach(([taskId, task]) => {
+      const select = $(`[data-task-version="${taskId}"]`);
+      if (!select) return;
+
+      select.innerHTML = task.variants
+        .map((variant) => `<option value="${escapeHtml(variant.id)}" ${variant.id === task.default ? 'selected' : ''}>${escapeHtml(variant.label)}</option>`)
+        .join('');
+    });
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
 async function startTask(button) {
   if (currentJobId) {
     showToast(
@@ -754,7 +814,9 @@ async function startTask(button) {
       `/api/tasks/${button.dataset.task}`,
       {
         method: 'POST',
-        body: '{}',
+        body: JSON.stringify({
+          variant: $(`[data-task-version="${button.dataset.task}"]`)?.value,
+        }),
       },
     );
 
@@ -770,6 +832,86 @@ async function startTask(button) {
       '$ 준비 중…';
 
     pollJob(taskElement);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+
+async function loadScripts() {
+  try {
+    const data = await api('/api/scripts');
+    $('#script-select').innerHTML = data.scripts
+      .map((script) => `<option value="${escapeHtml(script.path)}">[${escapeHtml(script.group)}] ${escapeHtml(script.name)}</option>`)
+      .join('');
+    $('#script-status').textContent = `${data.scripts.length}개 파일 탐색됨`;
+  } catch (error) {
+    $('#script-status').textContent = error.message;
+  }
+}
+
+
+async function runSelectedScript() {
+  if (currentJobId) {
+    showToast('이미 작업이 실행 중입니다.', true);
+    return;
+  }
+
+  try {
+    const job = await api('/api/scripts/run', {
+      method: 'POST',
+      body: JSON.stringify({ path: $('#script-select').value }),
+    });
+    currentJobId = job.id;
+    $('#script-job-status').textContent = '실행 중';
+    $('#script-log').textContent = '$ 준비 중…';
+    pollScriptJob();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+
+async function pollScriptJob() {
+  clearTimeout(jobPollTimer);
+  try {
+    const job = await api(`/api/jobs/${currentJobId}`);
+    $('#script-job-status').textContent = JOB_STATUS_TEXT[job.status] || job.status;
+    $('#script-log').textContent = (job.log || []).join('\n') || '$ 프로세스 시작 중…';
+    if (['success', 'failed'].includes(job.status)) {
+      showToast(job.status === 'success' ? '스크립트 실행 완료' : '스크립트 실행 실패', job.status === 'failed');
+      currentJobId = null;
+      return;
+    }
+    jobPollTimer = setTimeout(pollScriptJob, 1500);
+  } catch (error) {
+    showToast(error.message, true);
+    currentJobId = null;
+  }
+}
+
+
+async function loadStorage() {
+  try {
+    const storage = await api('/api/storage');
+    $('#storage-status').textContent = storage.configured
+      ? `연결됨: ${storage.external}`
+      : '미연결 — ARTIFACT_STORAGE_PATH를 설정하세요.';
+    $('#storage-pull').disabled = !storage.configured;
+    $('#storage-push').disabled = !storage.configured;
+  } catch (error) {
+    $('#storage-status').textContent = error.message;
+  }
+}
+
+
+async function syncStorage(direction) {
+  try {
+    const result = await api('/api/storage/sync', {
+      method: 'POST',
+      body: JSON.stringify({ direction }),
+    });
+    showToast(`${result.files}개 파일을 동기화했습니다.`);
   } catch (error) {
     showToast(error.message, true);
   }
@@ -846,6 +988,9 @@ function refreshAll() {
   loadGit();
   loadIssues();
   loadNotes();
+  loadTasks();
+  loadScripts();
+  loadStorage();
 
   showToast('새로고침했습니다.');
 }
@@ -867,6 +1012,15 @@ function bindEvents() {
 
   $('#refresh').onclick =
     refreshAll;
+
+  $('#run-script').onclick =
+    runSelectedScript;
+
+  $('#storage-pull').onclick =
+    () => syncStorage('pull');
+
+  $('#storage-push').onclick =
+    () => syncStorage('push');
 }
 
 
@@ -884,6 +1038,9 @@ function init() {
   loadGit();
   loadIssues();
   loadNotes();
+  loadTasks();
+  loadScripts();
+  loadStorage();
 }
 
 init();

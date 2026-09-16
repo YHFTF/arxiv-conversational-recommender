@@ -11,8 +11,11 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       REQUIRE_GPU: ${REQUIRE_GPU:-true}
+      OUTPUT_DIR: /workspace/output
+      ARTIFACT_STORAGE_PATH: ${ARTIFACT_STORAGE_PATH:-}
     volumes:
       - .:/workspace
+      - ${OUTPUT_STORAGE_PATH:-./output}:/workspace/output
       - dashboard-data:/dashboard-data
     restart: unless-stopped
 

@@ -11,7 +11,7 @@ sys.path.insert(0, SCRIPT_DIR)
 
 from config import *
 
-META_EMB_PATH = os.path.join(PROJECT_ROOT, 'output', 'knowledge_meta_embeddings.pt')
+META_EMB_PATH = os.path.join(SHARED_OUTPUT_DIR, 'knowledge_meta_embeddings.pt')
 
 def get_openai_embeddings_batch(texts, api_key, batch_size=1024):
     """OpenAI API를 사용하여 텍스트 리스트의 128차원 임베딩을 배치 단위로 조회합니다."""
