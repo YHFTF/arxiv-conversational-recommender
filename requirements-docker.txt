@@ -1,0 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+# CUDA-enabled by default; it safely falls back to CPU when no GPU is exposed.
+torch==2.6.0+cu124
+-r requirements.txt

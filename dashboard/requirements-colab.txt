@@ -1,0 +1,2 @@
+# Colab already provides a CUDA-compatible PyTorch build. Do not replace it.
+-r requirements.txt

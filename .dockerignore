@@ -1,0 +1,10 @@
+.git
+.dashboard-data
+__pycache__
+*.py[cod]
+.env
+venv
+dataset
+subdataset
+output
+data.zip

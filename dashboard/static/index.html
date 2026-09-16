@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ko">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Arxiv Intelligence</title>
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/gpu.css">
+</head>
+
+<body>
+    <aside><a class="brand"><b>AI</b><span>ARXIV<br>INTELLIGENCE</span></a>
+        <nav><button data-page="home" class="active">⌂ <span>홈</span></button><button data-page="project">⌘ <span>프로젝트
+                    설명</span></button><button data-page="learn">↗ <span>학습</span></button><button
+                data-page="benchmark">▦ <span>벤치마크</span></button><button data-page="production">◇
+                <span>실사용</span></button></nav>
+        <footer><i></i><span>시스템 온라인</span></footer>
+    </aside>
+    <main>
+        <header>
+            <div><small>RESEARCH OPERATIONS / TEAM WORKSPACE</small>
+                <h1 id="title">프로젝트 컨트롤 센터</h1>
+            </div>
+            <div><code id="branch-pill">● branch</code><button id="refresh">새로고침 ↻</button></div>
+        </header>
+        <section id="home" class="page active">
+            <div class="hero">
+                <div><label>● LIVE PROJECT</label>
+                    <h2>팀의 연구 흐름을<br><strong>한 화면에서.</strong></h2>
+                    <p>코드 변경부터 이슈, 실험 실행까지. 흩어진 협업의 맥락을 하나로 연결합니다.</p>
+                </div>
+                <div class="branch"><small>현재 브랜치</small><b id="hero-branch">—</b><span id="repo-state">확인
+                        중</span><button id="pull">GitHub Pull ↓</button></div>
+            </div>
+            <div class="metrics">
+                <div><small>최근 커밋</small><b id="commit-count">—</b></div>
+                <div><small>활성 브랜치</small><b id="branch-count">—</b></div>
+                <div><small>열린 이슈</small><b id="issue-count">—</b></div>
+                <div><small>작업 상태</small><b class="lime">READY</b></div>
+            </div>
+            <div class="two">
+                <article>
+                    <div class="head">
+                        <div><label>DEVELOPMENT</label>
+                            <h3>최근 개발 내역</h3>
+                        </div><button id="branches">브랜치 보기 →</button>
+                    </div>
+                    <div id="commits">불러오는 중…</div>
+                </article>
+                <article>
+                    <div class="head">
+                        <div><label>ISSUE RADAR</label>
+                            <h3>심각도별 이슈</h3>
+                        </div><small id="issue-repo"></small>
+                    </div>
+                    <div id="filters"></div>
+                    <div id="issues">불러오는 중…</div>
+                </article>
+            </div>
+            <article class="notes">
+                <div class="head">
+                    <div><label>TEAM NOTES</label>
+                        <h3>팀 메모</h3>
+                    </div>
+                </div>
+                <form id="note-form"><input id="author" placeholder="이름" required><textarea id="content"
+                        placeholder="팀원에게 남길 메모…" required></textarea><button>등록</button></form>
+                <div id="note-list"></div>
+            </article>
+        </section>
+        <section id="project" class="page">
+            <div class="intro"><label>SYSTEM BLUEPRINT</label>
+                <h2>프로젝트 구조와 문서</h2>
+                <p>데이터 수집부터 추천 결과까지의 흐름과 연구 문서를 탐색합니다.</p>
+            </div>
+            <div class="flow">
+                <div>01<b>DATA</b><small>수집 · 전처리</small></div><i>→</i>
+                <div>02<b>KNOWLEDGE</b><small>LLM 의미 추출</small></div><i>→</i>
+                <div>03<b>GRAPH</b><small>이종 그래프 구성</small></div><i>→</i>
+                <div>04<b>RECOMMEND</b><small>LightGCN 추천</small></div>
+            </div>
+            <div class="docs">
+                <nav>
+                    <h3>문서</h3>
+                    <div id="doc-list"></div>
+                    <h3>디렉터리</h3>
+                    <div id="tree"></div>
+                </nav>
+                <article id="markdown">문서를 선택하세요.</article>
+            </div>
+        </section>
+        <section id="learn" class="page task">
+            <div class="task-hero purple"><label>MODEL LAB / TRAIN</label>
+                <h2>지식 그래프 모델 학습</h2>
+                <p>Domain · Task · Method 지식과 인용 그래프를 결합해 LightGCN을 학습합니다.</p>
+                <div class="task-actions"><button data-task="train">로컬 GPU 학습 ▶</button><a class="colab-button"
+                        data-colab href="#">Colab에서 실행 ↗</a></div>
+            </div>
+            <div class="two">
+                <article><label>EXECUTION PLAN</label>
+                    <h3>학습 파이프라인</h3>
+                    <ol>
+                        <li>데이터와 지식 메타 로드</li>
+                        <li>Train · Validation · Test 분할</li>
+                        <li>100 epoch BPR 최적화</li>
+                        <li>Recall@20 · NDCG@20 평가</li>
+                    </ol>
+                </article>
+                <article class="console-wrap">
+                    <div class="head">
+                        <h3>실행 로그</h3><em>대기 중</em>
+                    </div>
+                    <pre>$ 학습 시작 버튼을 누르세요.</pre>
+                </article>
+            </div>
+        </section>
+        <section id="benchmark" class="page task">
+            <div class="task-hero cyan"><label>MODEL LAB / EVALUATE</label>
+                <h2>Zero-Leakage 벤치마크</h2>
+                <p>다섯 모델의 일반 추천 및 신규 논문 추천 성능을 공정하게 비교합니다.</p>
+                <div class="task-actions"><button data-task="benchmark">로컬 GPU 벤치마크 ▶</button><a class="colab-button"
+                        data-colab href="#">Colab에서 실행 ↗</a></div>
+            </div>
+            <div class="models"><span>BPR-MF</span><span>GCN +
+                    BPR</span><span>GraphSAGE</span><span>LightGCN</span><span>Ours + Knowledge</span></div>
+            <article class="console-wrap">
+                <div class="head">
+                    <h3>벤치마크 로그</h3><em>대기 중</em>
+                </div>
+                <pre>$ 벤치마크 시작 버튼을 누르세요.</pre>
+            </article>
+        </section>
+        <section id="production" class="page">
+            <div class="soon">
+                <div class="orb">AI</div><label>COMING NEXT</label>
+                <h2>실사용 추천 인터페이스</h2>
+                <p>자연어로 관심사를 입력하고 관련 논문을 추천받는 서비스가 연결될 예정입니다.</p>
+                <div><span>✓ 모델 가중치</span><span>✓ 자연어 추론</span><span>○ 웹 질의 API</span><span>○ 추천 결과 UI</span></div>
+            </div>
+        </section>
+    </main>
+    <div id="toast"></div>
+    <dialog id="modal"><button id="close">×</button><label>GIT REFERENCES</label>
+        <h2>브랜치</h2>
+        <div id="branch-list"></div>
+    </dialog>
+    <script src="/app.js"></script>
+</body>
+
+</html>

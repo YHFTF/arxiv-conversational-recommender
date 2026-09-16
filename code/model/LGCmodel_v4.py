@@ -23,7 +23,9 @@ class ArxivLightGCNV4(nn.Module):
         # 1. Base 논문 임베딩 (V2처럼 학습 가능하도록 Parameter로 변경)
         self.paper_base_x = nn.Parameter(paper_x)
         # 콜드 스타트용 원본 피처 (학습되지 않은 순수 텍스트 벡터)
-        self.register_buffer('paper_raw_x', paper_x.clone())
+        # Derived from the graph on every startup; keeping it out of checkpoints
+        # preserves compatibility with existing V4 weights.
+        self.register_buffer('paper_raw_x', paper_x.clone(), persistent=False)
         
         # 2. 16000 편의 논문에 대응하는 [16000, 3] 지식 ID 배열
         self.register_buffer('paper_knowledge_ids', paper_knowledge_ids.long().to(device))

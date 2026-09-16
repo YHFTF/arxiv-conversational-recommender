@@ -1,0 +1,22 @@
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+      args:
+        INSTALL_ML_DEPS: ${INSTALL_ML_DEPS:-true}
+    ports:
+      - "0.0.0.0:${DASHBOARD_PORT:-8080}:8080"
+    environment:
+      PROJECT_ROOT: /workspace
+      DASHBOARD_DATA: /dashboard-data
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-YHFTF/arxiv-conversational-recommender}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      REQUIRE_GPU: ${REQUIRE_GPU:-true}
+    volumes:
+      - .:/workspace
+      - dashboard-data:/dashboard-data
+    restart: unless-stopped
+volumes:
+  dashboard-data:
