@@ -18,7 +18,14 @@ body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font: 14px/1.55 Inter, system-ui, sans-serif
+    font: 16px/1.55 "Pretendard Variable", Pretendard, Inter, system-ui, sans-serif
+}
+
+button,
+input,
+textarea,
+select {
+    font: inherit
 }
 
 aside {
@@ -38,7 +45,7 @@ aside {
     gap: 12px;
     align-items: center;
     border-bottom: 1px solid var(--line);
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 2px
 }
 
@@ -77,7 +84,7 @@ aside {
 
 aside footer {
     margin: auto 20px 24px;
-    font-size: 10px;
+    font-size: 11px;
     border-top: 1px solid var(--line);
     padding-top: 16px
 }
@@ -112,22 +119,39 @@ header {
 
 header small,
 label {
-    font-size: 9px;
+    font-size: 11px;
     letter-spacing: 2px;
     color: var(--lime)
 }
 
 header h1 {
-    font-size: 21px;
+    font-size: 24px;
     margin: 3px 0
 }
 
 header code,
-header button {
+header button,
+header .github-link {
     background: var(--panel);
     border: 1px solid var(--line);
     color: #b9c1cd;
     padding: 8px 11px
+}
+
+header .github-link {
+    text-decoration: none;
+    white-space: nowrap
+}
+
+header .github-link:hover {
+    border-color: var(--lime);
+    color: var(--lime)
+}
+
+header > div:last-child {
+    display: flex;
+    align-items: center;
+    gap: 12px
 }
 
 .page {
@@ -160,7 +184,7 @@ header button {
 }
 
 .hero h2 {
-    font-size: 40px;
+    font-size: 44px;
     line-height: 1.12;
     margin: 15px 0
 }
@@ -188,12 +212,12 @@ header button {
 }
 
 .branch b {
-    font: 25px ui-monospace;
+    font: 28px ui-monospace;
     margin: 5px 0
 }
 
 .branch span {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--muted)
 }
 
@@ -215,6 +239,9 @@ header button {
 .branch .branch-actions button {
     width: auto;
     flex: 1;
+    min-width: 0;
+    padding: 12px 6px;
+    font-size: 14px;
     white-space: nowrap
 }
 
@@ -246,7 +273,7 @@ header button {
 }
 
 .metrics b {
-    font: 25px ui-monospace
+    font: 28px ui-monospace
 }
 
 .lime {
@@ -303,20 +330,20 @@ article h3 {
     place-items: center;
     color: var(--cyan);
     font-style: normal;
-    font-size: 10px
+    font-size: 11px
 }
 
 .commit b,
 .issue b {
     display: block;
-    font-size: 12px
+    font-size: 14px
 }
 
 .commit small,
 .issue small,
 .issue code {
     color: var(--muted);
-    font-size: 9px
+    font-size: 11px
 }
 
 .issue {
@@ -349,7 +376,7 @@ article h3 {
     border-radius: 15px;
     background: #0c1119;
     color: var(--muted);
-    font-size: 9px;
+    font-size: 11px;
     padding: 5px 9px;
     margin: 0 4px 10px 0
 }
@@ -399,7 +426,7 @@ article h3 {
 .note time {
     float: right;
     color: var(--muted);
-    font-size: 9px
+    font-size: 11px
 }
 
 .note p {
@@ -415,7 +442,7 @@ article h3 {
 .intro h2,
 .task-hero h2,
 .soon h2 {
-    font-size: 35px;
+    font-size: 38px;
     margin: 6px 0
 }
 
@@ -431,7 +458,7 @@ article h3 {
     background: var(--panel);
     padding: 20px;
     color: var(--lime);
-    font: 10px ui-monospace
+    font: 12px ui-monospace
 }
 
 .flow b,
@@ -467,7 +494,7 @@ article h3 {
 }
 
 .docs>nav h3 {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--muted);
     letter-spacing: 1px
 }
@@ -487,7 +514,7 @@ article h3 {
 }
 
 .tree {
-    font-size: 10px;
+    font-size: 12px;
     color: #aab4c1;
     padding: 5px 0
 }
@@ -566,7 +593,7 @@ article h3 {
 .console-wrap em {
     font-style: normal;
     color: var(--lime);
-    font-size: 10px
+    font-size: 12px
 }
 
 button {
@@ -678,7 +705,7 @@ button.is-busy::before {
     place-items: center;
     margin: 0 auto 30px;
     color: var(--lime);
-    font: 23px Georgia
+    font: 26px Georgia
 }
 
 .soon span {
@@ -686,7 +713,7 @@ button.is-busy::before {
     border: 1px solid var(--line);
     padding: 8px 12px;
     color: var(--muted);
-    font-size: 10px;
+    font-size: 12px;
     margin: 4px
 }
 
@@ -893,7 +920,7 @@ dialog::backdrop {
     }
 
     .hero h2 {
-        font-size: 31px
+        font-size: 34px
     }
 
     .metrics {

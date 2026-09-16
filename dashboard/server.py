@@ -256,6 +256,8 @@ def git_info() -> dict:
     _, dirty, _ = run(
         [
             "git",
+            "-c",
+            "core.autocrlf=true",
             "status",
             "--porcelain",
         ]
