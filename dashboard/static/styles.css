@@ -552,6 +552,78 @@ article h3 {
     font-size: 10px
 }
 
+button {
+    position: relative;
+    overflow: hidden;
+    transform: translateY(0) scale(1);
+    transition: transform .16s ease, box-shadow .2s ease, border-color .2s ease, background-color .2s ease, color .2s ease, opacity .2s ease;
+    will-change: transform;
+    cursor: pointer
+}
+
+button:not(:disabled):hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, .24), 0 0 0 1px rgba(199, 243, 107, .12)
+}
+
+button:not(:disabled):active {
+    transform: translateY(1px) scale(.97);
+    transition-duration: .06s
+}
+
+button:focus-visible {
+    outline: 2px solid var(--lime);
+    outline-offset: 3px
+}
+
+button:disabled {
+    cursor: not-allowed
+}
+
+button.button-pop {
+    animation: button-pop .34s ease
+}
+
+button.is-busy {
+    cursor: progress;
+    opacity: .82
+}
+
+button.is-busy::before {
+    content: '';
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-right: 8px;
+    vertical-align: -2px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: button-spin .65s linear infinite
+}
+
+@keyframes button-pop {
+    0% { transform: scale(1) }
+    45% { transform: scale(.95) }
+    100% { transform: scale(1) }
+}
+
+@keyframes button-spin {
+    to { transform: rotate(360deg) }
+}
+
+.script-runner {
+    margin-top: 18px
+}
+
+.script-runner .control-row {
+    margin-bottom: 18px
+}
+
+.script-runner pre {
+    height: min(520px, 58vh)
+}
+
 .models {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
@@ -658,6 +730,22 @@ dialog::backdrop {
     border: 1px solid var(--line);
     color: var(--text);
     padding: 9px 12px
+}
+
+.stop-button {
+    border-color: #71353d !important;
+    color: #ff929f !important;
+    background: #271419 !important
+}
+
+.stop-button:disabled {
+    opacity: .38;
+    cursor: not-allowed
+}
+
+.stop-button.is-busy:disabled {
+    opacity: .82;
+    cursor: progress
 }
 
 .branch-commit {

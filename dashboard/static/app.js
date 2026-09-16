@@ -19,6 +19,7 @@ const COLAB_URL =
 const PAGE_NAMES = {
   home: '프로젝트 컨트롤 센터',
   project: '프로젝트 설명',
+  scripts: '라이브 스크립트 실행',
   learn: '모델 학습',
   benchmark: '성능 벤치마크',
   production: '실사용',
@@ -29,6 +30,8 @@ const JOB_STATUS_TEXT = {
   running: '실행 중',
   success: '완료',
   failed: '실패',
+  stopping: '중지 중',
+  cancelled: '중지됨',
 };
 
 
@@ -46,6 +49,37 @@ let currentJobId = null;
 let jobPollTimer = null;
 
 
+function setButtonBusy(button, busy, label = '') {
+  if (!button) return;
+
+  if (busy) {
+    button.dataset.idleLabel ||= button.textContent.trim();
+    button.textContent = label || button.dataset.idleLabel;
+    button.classList.add('is-busy');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    return;
+  }
+
+  button.textContent = button.dataset.idleLabel || button.textContent;
+  button.classList.remove('is-busy');
+  button.disabled = false;
+  button.removeAttribute('aria-busy');
+}
+
+
+function initButtonFeedback() {
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled) return;
+    button.classList.remove('button-pop');
+    void button.offsetWidth;
+    button.classList.add('button-pop');
+    window.setTimeout(() => button.classList.remove('button-pop'), 360);
+  });
+}
+
+
 // ============================================================
 // API
 // ============================================================
@@ -61,11 +95,13 @@ async function api(path, options = {}) {
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(
+    const error = new Error(
       data.error ||
       data.output ||
       '요청 실패',
     );
+    error.data = data;
+    throw error;
   }
 
   return data;
@@ -795,6 +831,8 @@ async function loadTasks() {
         .map((variant) => `<option value="${escapeHtml(variant.id)}" ${variant.id === task.default ? 'selected' : ''}>${escapeHtml(variant.label)}</option>`)
         .join('');
     });
+
+    resumeActiveJob(data.jobs || []);
   } catch (error) {
     showToast(error.message, true);
   }
@@ -809,6 +847,12 @@ async function startTask(button) {
     return;
   }
 
+  const taskElement = button.closest('.task');
+  const logElement = $('pre', taskElement);
+  setButtonBusy(button, true, 'CUDA 확인 중…');
+  $('em', taskElement).textContent = '환경 확인 중';
+  logElement.textContent = '$ CUDA 환경과 실행 가능 여부를 확인하는 중…';
+
   try {
     const job = await api(
       `/api/tasks/${button.dataset.task}`,
@@ -822,8 +866,7 @@ async function startTask(button) {
 
     currentJobId = job.id;
 
-    const taskElement =
-      button.closest('.task');
+    setButtonBusy(button, true, '실행 중…');
 
     $('em', taskElement).textContent =
       '실행 중';
@@ -831,9 +874,53 @@ async function startTask(button) {
     $('pre', taskElement).textContent =
       '$ 준비 중…';
 
+    $(`[data-stop-task="${button.dataset.task}"]`).disabled = false;
+
     pollJob(taskElement);
   } catch (error) {
+    setButtonBusy(button, false);
+
+    $('em', taskElement).textContent = '실패';
+    logElement.textContent = [
+      `$ 오류: ${error.message}`,
+      ...(error.data?.log || []),
+    ].join('\n');
+    logElement.scrollTop = logElement.scrollHeight;
     showToast(error.message, true);
+  }
+}
+
+
+function resumeActiveJob(jobs) {
+  if (currentJobId) return;
+
+  const activeJob = [...jobs].reverse().find((job) =>
+    ['queued', 'running', 'stopping'].includes(job.status),
+  );
+
+  if (!activeJob) return;
+
+  currentJobId = activeJob.id;
+
+  if (activeJob.task === 'script') {
+    setButtonBusy($('#run-script'), true, '실행 중…');
+    $('#stop-script').disabled = activeJob.status === 'stopping';
+    if (activeJob.status === 'stopping') {
+      setButtonBusy($('#stop-script'), true, '중지 중…');
+    }
+    pollScriptJob();
+    return;
+  }
+
+  const taskElement = $(`#${activeJob.task}`);
+  if (taskElement) {
+    const stopButton = $('[data-stop-task]', taskElement);
+    setButtonBusy($('[data-task]', taskElement), true, '실행 중…');
+    stopButton.disabled = activeJob.status === 'stopping';
+    if (activeJob.status === 'stopping') {
+      setButtonBusy(stopButton, true, '중지 중…');
+    }
+    pollJob(taskElement);
   }
 }
 
@@ -857,16 +944,29 @@ async function runSelectedScript() {
     return;
   }
 
+  const runButton = $('#run-script');
+  setButtonBusy(runButton, true, '시작 중…');
+  $('#script-job-status').textContent = '시작 중';
+  $('#script-log').textContent = '$ 스크립트 실행을 준비하는 중…';
+
   try {
     const job = await api('/api/scripts/run', {
       method: 'POST',
       body: JSON.stringify({ path: $('#script-select').value }),
     });
     currentJobId = job.id;
+    setButtonBusy(runButton, true, '실행 중…');
     $('#script-job-status').textContent = '실행 중';
     $('#script-log').textContent = '$ 준비 중…';
+    $('#stop-script').disabled = false;
     pollScriptJob();
   } catch (error) {
+    setButtonBusy(runButton, false);
+    $('#script-job-status').textContent = '실패';
+    $('#script-log').textContent = [
+      `$ 오류: ${error.message}`,
+      ...(error.data?.log || []),
+    ].join('\n');
     showToast(error.message, true);
   }
 }
@@ -878,13 +978,22 @@ async function pollScriptJob() {
     const job = await api(`/api/jobs/${currentJobId}`);
     $('#script-job-status').textContent = JOB_STATUS_TEXT[job.status] || job.status;
     $('#script-log').textContent = (job.log || []).join('\n') || '$ 프로세스 시작 중…';
-    if (['success', 'failed'].includes(job.status)) {
-      showToast(job.status === 'success' ? '스크립트 실행 완료' : '스크립트 실행 실패', job.status === 'failed');
+    if (['success', 'failed', 'cancelled'].includes(job.status)) {
+      const failed = job.status === 'failed';
+      showToast(job.status === 'cancelled' ? '스크립트 실행 중지됨' : job.status === 'success' ? '스크립트 실행 완료' : '스크립트 실행 실패', failed);
+      setButtonBusy($('#run-script'), false);
+      setButtonBusy($('#stop-script'), false);
+      $('#stop-script').disabled = true;
       currentJobId = null;
       return;
     }
     jobPollTimer = setTimeout(pollScriptJob, 1500);
   } catch (error) {
+    $('#script-job-status').textContent = '실패';
+    $('#script-log').textContent += `\n$ 로그 조회 오류: ${error.message}`;
+    setButtonBusy($('#run-script'), false);
+    setButtonBusy($('#stop-script'), false);
+    $('#stop-script').disabled = true;
     showToast(error.message, true);
     currentJobId = null;
   }
@@ -943,6 +1052,7 @@ async function pollJob(taskElement) {
     const isFinished = [
       'success',
       'failed',
+      'cancelled',
     ].includes(job.status);
 
     if (isFinished) {
@@ -950,12 +1060,17 @@ async function pollJob(taskElement) {
         job.status === 'failed';
 
       showToast(
-        failed
+        job.status === 'cancelled'
+          ? '작업 중지됨'
+          : failed
           ? '작업 실패'
           : '작업 완료',
         failed,
       );
 
+      setButtonBusy($('[data-task]', taskElement), false);
+      setButtonBusy($('[data-stop-task]', taskElement), false);
+      $('[data-stop-task]', taskElement).disabled = true;
       currentJobId = null;
       return;
     }
@@ -965,8 +1080,33 @@ async function pollJob(taskElement) {
       1500,
     );
   } catch (error) {
+    const logElement = $('pre', taskElement);
+    $('em', taskElement).textContent = '실패';
+    logElement.textContent += `\n$ 로그 조회 오류: ${error.message}`;
+    logElement.scrollTop = logElement.scrollHeight;
+    setButtonBusy($('[data-task]', taskElement), false);
+    setButtonBusy($('[data-stop-task]', taskElement), false);
+    $('[data-stop-task]', taskElement).disabled = true;
     showToast(error.message, true);
     currentJobId = null;
+  }
+}
+
+
+async function stopCurrentJob(stopButton) {
+  if (!currentJobId) return;
+
+  setButtonBusy(stopButton, true, '중지 중…');
+
+  try {
+    await api(`/api/jobs/${currentJobId}/stop`, {
+      method: 'POST',
+      body: '{}',
+    });
+    showToast('중지 요청을 보냈습니다.');
+  } catch (error) {
+    setButtonBusy(stopButton, false);
+    showToast(error.message, true);
   }
 }
 
@@ -976,6 +1116,10 @@ function initTasks() {
     button.onclick = () => {
       startTask(button);
     };
+  });
+
+  $$('[data-stop-task]').forEach((button) => {
+    button.onclick = () => stopCurrentJob(button);
   });
 }
 
@@ -1016,6 +1160,9 @@ function bindEvents() {
   $('#run-script').onclick =
     runSelectedScript;
 
+  $('#stop-script').onclick =
+    () => stopCurrentJob($('#stop-script'));
+
   $('#storage-pull').onclick =
     () => syncStorage('pull');
 
@@ -1029,6 +1176,7 @@ function bindEvents() {
 // ============================================================
 
 function init() {
+  initButtonFeedback();
   initNavigation();
   initColabLinks();
   initNotes();

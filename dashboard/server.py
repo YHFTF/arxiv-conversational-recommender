@@ -88,6 +88,7 @@ TASKS = {
 # ---------------------------------------------------------------------
 
 jobs: dict[str, dict] = {}
+job_processes: dict[str, subprocess.Popen] = {}
 jobs_lock = threading.Lock()
 
 
@@ -128,19 +129,43 @@ def run(
         return 1, "", str(error)
 
 
-def gpu_available() -> bool:
-    """Return whether PyTorch can see a CUDA GPU."""
+def gpu_diagnostics() -> tuple[bool, list[str]]:
+    """Return CUDA availability and user-facing PyTorch diagnostics."""
 
-    code, stdout, _ = run(
+    code, stdout, stderr = run(
         [
             "python",
             "-c",
-            "import torch; print(int(torch.cuda.is_available()))",
+            (
+                "import sys, torch; "
+                "available=torch.cuda.is_available(); "
+                "print(f'Python: {sys.executable}'); "
+                "print(f'PyTorch: {torch.__version__}'); "
+                "print(f'PyTorch CUDA runtime: {torch.version.cuda or \"없음 (CPU 빌드)\"}'); "
+                "print(f'torch.cuda.is_available(): {available}'); "
+                "print(f'CUDA device count: {torch.cuda.device_count()}'); "
+                "print(f'CUDA device: {torch.cuda.get_device_name(0) if available else \"없음\"}')"
+            ),
         ],
         timeout=30,
     )
 
-    return code == 0 and stdout == "1"
+    lines = [line for line in stdout.splitlines() if line]
+    if stderr:
+        lines.extend(line for line in stderr.splitlines() if line)
+    if code != 0:
+        lines.append(f"CUDA 진단 명령 종료 코드: {code}")
+
+    available = code == 0 and any(
+        line == "torch.cuda.is_available(): True" for line in lines
+    )
+    return available, lines
+
+
+def gpu_available() -> bool:
+    """Return whether PyTorch can see a CUDA GPU."""
+
+    return gpu_diagnostics()[0]
 
 
 def discover_scripts() -> list[dict]:
@@ -832,6 +857,9 @@ def worker(
     """Run a dashboard task and stream its output into job state."""
 
     with jobs_lock:
+        if jobs[job_id].get("cancel_requested"):
+            jobs[job_id].update(status="cancelled", finished_at=now())
+            return
         jobs[job_id]["status"] = "running"
 
     try:
@@ -846,6 +874,13 @@ def worker(
             errors="replace",
         )
 
+        with jobs_lock:
+            job_processes[job_id] = process
+            cancel_requested = jobs[job_id].get("cancel_requested", False)
+
+        if cancel_requested:
+            process.terminate()
+
         for line in process.stdout or []:
             with jobs_lock:
                 jobs[job_id]["log"].append(
@@ -859,15 +894,19 @@ def worker(
         exit_code = process.wait()
 
         with jobs_lock:
+            cancelled = jobs[job_id].get("cancel_requested", False)
             jobs[job_id].update(
                 status=(
-                    "success"
+                    "cancelled"
+                    if cancelled
+                    else "success"
                     if exit_code == 0
                     else "failed"
                 ),
                 exit_code=exit_code,
                 finished_at=now(),
             )
+            job_processes.pop(job_id, None)
 
     except Exception as error:
         with jobs_lock:
@@ -876,6 +915,8 @@ def worker(
                 error=str(error),
                 finished_at=now(),
             )
+            jobs[job_id]["log"].append(f"[실행 오류] {error}")
+            job_processes.pop(job_id, None)
 
 
 # ---------------------------------------------------------------------
@@ -1043,6 +1084,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/scripts/run":
             return self.handle_run_script(data)
 
+        if self.path.startswith("/api/jobs/") and self.path.endswith("/stop"):
+            return self.handle_stop_job(self.path)
+
         if self.path == "/api/storage/sync":
             return self.handle_storage_sync(data)
 
@@ -1161,6 +1205,30 @@ class Handler(SimpleHTTPRequestHandler):
             },
             404,
         )
+
+    def handle_stop_job(self, path: str) -> None:
+        """Request termination of one queued or running background job."""
+
+        job_id = path.removesuffix("/stop").rsplit("/", 1)[-1]
+
+        with jobs_lock:
+            job = jobs.get(job_id)
+
+            if not job:
+                return self.send_json({"error": "작업이 없습니다."}, 404)
+
+            if job["status"] in {"success", "failed", "cancelled"}:
+                return self.send_json(job)
+
+            job["cancel_requested"] = True
+            job["status"] = "stopping"
+            job["log"].append("[중지 요청] 사용자가 작업 중지를 요청했습니다.")
+            process = job_processes.get(job_id)
+
+        if process and process.poll() is None:
+            process.terminate()
+
+        return self.send_json(job, 202)
 
     def handle_create_note(
         self,
@@ -1369,13 +1437,19 @@ class Handler(SimpleHTTPRequestHandler):
             }
         )
 
-        if require_gpu and not gpu_available():
+        gpu_ok, gpu_log = gpu_diagnostics()
+
+        if require_gpu and not gpu_ok:
             return self.send_json(
                 {
                     "error": (
                         "CUDA GPU를 찾지 못했습니다. "
                         "Colab에서 실행 버튼을 사용하세요."
-                    )
+                    ),
+                    "log": [
+                        "$ CUDA 사용 가능 여부를 확인했습니다.",
+                        *gpu_log,
+                    ],
                 },
                 409,
             )

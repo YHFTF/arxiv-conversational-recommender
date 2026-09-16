@@ -5,14 +5,14 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Arxiv Intelligence</title>
-    <link rel="stylesheet" href="/styles.css">
-    <link rel="stylesheet" href="/gpu.css">
+    <link rel="stylesheet" href="/styles.css?v=20260916-5">
+    <link rel="stylesheet" href="/gpu.css?v=20260916-2">
 </head>
 
 <body>
     <aside><a class="brand"><b>AI</b><span>ARXIV<br>INTELLIGENCE</span></a>
         <nav><button data-page="home" class="active">⌂ <span>홈</span></button><button data-page="project">⌘ <span>프로젝트
-                    설명</span></button><button data-page="learn">↗ <span>학습</span></button><button
+                    설명</span></button><button data-page="scripts">⌁ <span>스크립트 실행</span></button><button data-page="learn">↗ <span>학습</span></button><button
                 data-page="benchmark">▦ <span>벤치마크</span></button><button data-page="production">◇
                 <span>실사용</span></button></nav>
         <footer><i></i><span>시스템 온라인</span></footer>
@@ -89,15 +89,7 @@
                 </nav>
                 <article id="markdown">문서를 선택하세요.</article>
             </div>
-            <div class="two operations">
-                <article>
-                    <label>LIVE SCRIPT RUNNER</label>
-                    <h3>컨테이너 코드 실행</h3>
-                    <p>새로고침하면 현재 작업 트리의 Python 파일을 다시 탐색합니다.</p>
-                    <div class="control-row"><select id="script-select"></select><button id="run-script">실행 ▶</button></div>
-                    <div class="head"><small id="script-status">스크립트를 불러오는 중…</small><em id="script-job-status">대기 중</em></div>
-                    <pre id="script-log">$ 실행할 파일을 선택하세요.</pre>
-                </article>
+            <div class="operations">
                 <article>
                     <label>SHARED ARTIFACTS</label>
                     <h3>Output 외부 저장소</h3>
@@ -106,11 +98,22 @@
                 </article>
             </div>
         </section>
+        <section id="scripts" class="page">
+            <div class="intro"><label>LIVE SCRIPT RUNNER</label>
+                <h2>컨테이너 코드 실행</h2>
+                <p>현재 작업 트리의 Python 스크립트를 선택해 컨테이너 안에서 실행하고 로그를 실시간으로 확인합니다.</p>
+            </div>
+            <article class="console-wrap script-runner">
+                <div class="control-row"><select id="script-select"></select><button id="run-script">실행 ▶</button><button id="stop-script" class="stop-button" disabled>중지 ■</button></div>
+                <div class="head"><small id="script-status">스크립트를 불러오는 중…</small><em id="script-job-status">대기 중</em></div>
+                <pre id="script-log">$ 실행할 파일을 선택하세요.</pre>
+            </article>
+        </section>
         <section id="learn" class="page task">
             <div class="task-hero purple"><label>MODEL LAB / TRAIN</label>
                 <h2>지식 그래프 모델 학습</h2>
                 <p>Domain · Task · Method 지식과 인용 그래프를 결합해 LightGCN을 학습합니다.</p>
-                <div class="task-actions"><select data-task-version="train"></select><button data-task="train">로컬 GPU 학습 ▶</button><a class="colab-button"
+                <div class="task-actions"><select data-task-version="train"></select><button data-task="train">로컬 GPU 학습 ▶</button><button data-stop-task="train" class="stop-button" disabled>중지 ■</button><a class="colab-button"
                         data-colab href="#">Colab에서 실행 ↗</a></div>
             </div>
             <div class="two">
@@ -135,7 +138,7 @@
             <div class="task-hero cyan"><label>MODEL LAB / EVALUATE</label>
                 <h2>Zero-Leakage 벤치마크</h2>
                 <p>다섯 모델의 일반 추천 및 신규 논문 추천 성능을 공정하게 비교합니다.</p>
-                <div class="task-actions"><select data-task-version="benchmark"></select><button data-task="benchmark">로컬 GPU 벤치마크 ▶</button><a class="colab-button"
+                <div class="task-actions"><select data-task-version="benchmark"></select><button data-task="benchmark">로컬 GPU 벤치마크 ▶</button><button data-stop-task="benchmark" class="stop-button" disabled>중지 ■</button><a class="colab-button"
                         data-colab href="#">Colab에서 실행 ↗</a></div>
             </div>
             <div class="models"><span>BPR-MF</span><span>GCN +
@@ -164,7 +167,7 @@
         <h3 id="branch-history-title">개발 내역</h3>
         <div id="branch-history"></div>
     </dialog>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=20260916-5"></script>
 </body>
 
 </html>
