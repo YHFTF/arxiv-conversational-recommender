@@ -264,6 +264,7 @@ function renderCommits(commits) {
   }
 
   container.innerHTML = commits
+    .slice(0, 10)
     .map((commit) => {
       const initials = escapeHtml(
         commit.author

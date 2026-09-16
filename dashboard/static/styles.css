@@ -207,6 +207,23 @@ header button {
     font-weight: 750
 }
 
+.branch .branch-actions {
+    display: flex;
+    gap: 8px
+}
+
+.branch .branch-actions button {
+    width: auto;
+    flex: 1;
+    white-space: nowrap
+}
+
+.branch .branch-actions #branches {
+    border: 1px solid #465267;
+    background: #171d28;
+    color: var(--text)
+}
+
 .metrics {
     display: grid;
     grid-template-columns: repeat(4, 1fr);

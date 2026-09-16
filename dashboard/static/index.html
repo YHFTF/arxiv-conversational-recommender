@@ -5,7 +5,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Arxiv Intelligence</title>
-    <link rel="stylesheet" href="/styles.css?v=20260916-5">
+    <link rel="stylesheet" href="/styles.css?v=20260916-7">
     <link rel="stylesheet" href="/gpu.css?v=20260916-2">
 </head>
 
@@ -31,7 +31,7 @@
                     <p>배가 고파요.</p>
                 </div>
                 <div class="branch"><small>현재 브랜치</small><b id="hero-branch">—</b><span id="repo-state">확인
-                        중</span><button id="pull">GitHub Pull ↓</button></div>
+                        중</span><div class="branch-actions"><button id="branches">브랜치 전환</button><button id="pull">GitHub Pull ↓</button></div></div>
             </div>
             <div class="metrics">
                 <div><small>최근 커밋</small><b id="commit-count">—</b></div>
@@ -44,7 +44,7 @@
                     <div class="head">
                         <div><label>DEVELOPMENT</label>
                             <h3>최근 개발 내역</h3>
-                        </div><button id="branches">브랜치 보기 →</button>
+                        </div>
                     </div>
                     <div id="commits">불러오는 중…</div>
                 </article>
@@ -167,7 +167,7 @@
         <h3 id="branch-history-title">개발 내역</h3>
         <div id="branch-history"></div>
     </dialog>
-    <script src="/app.js?v=20260916-5"></script>
+    <script src="/app.js?v=20260916-6"></script>
 </body>
 
 </html>

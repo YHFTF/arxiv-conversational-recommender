@@ -274,7 +274,7 @@ def git_info() -> dict:
         [
             "git",
             "log",
-            "-20",
+            "-10",
             "--pretty=format:%h%x1f%an%x1f%aI%x1f%s%x1e",
         ]
     )
