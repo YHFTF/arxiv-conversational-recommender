@@ -6,6 +6,7 @@ on:
     paths:
       - dashboard/**
       - requirements.txt
+      - requirements-common.txt
       - requirements-docker.txt
       - docker-compose.dashboard.yml
       - .github/workflows/publish-dashboard-image.yml

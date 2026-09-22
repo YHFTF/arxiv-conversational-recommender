@@ -1,5 +1,8 @@
 --extra-index-url https://download.pytorch.org/whl/cu124
 
-# CUDA-enabled by default; it safely falls back to CPU when no GPU is exposed.
+# GPU/Docker-only ML dependencies. Do not reference requirements.txt here:
+# it pins the CPU wheel for local development.
 torch==2.6.0+cu124
--r requirements.txt
+torch-geometric==2.6.1
+ogb==1.3.6
+-r requirements-common.txt

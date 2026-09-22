@@ -1,124 +1,211 @@
+"""카테고리 균형을 보장하는 OGBN-Arxiv Forest Fire 샘플러.
+
+기존 구현은 인용 이웃만 따라가므로 연결이 조밀한 카테고리가 표본을
+독점했다. 이 스크립트는 Forest Fire 확장은 유지하면서 OGB의 40개 레이블에
+가능한 한 동일한 쿼터를 적용한다. 희소 레이블은 보유한 전량을 쓰고 남은
+쿼터는 다른 레이블에 균등 재배분한다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import random
+from collections import Counter, deque
+from typing import Dict, Iterable, List
+
 import networkx as nx
 import numpy as np
-import random
-from collections import deque
 import torch
-_real_torch_load = torch.load
 
-def _torch_load_with_weights_only_false(*args, **kwargs):
-    kwargs.setdefault("weights_only", False)  # 기본값을 False로 되돌림
-    return _real_torch_load(*args, **kwargs)
 
-torch.load = _torch_load_with_weights_only_false  # 임시 패치(세션 동안만)
-# ogb 로드 코드는 생략 (이미 성공했으므로)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DEFAULT_OUTPUT = os.path.join(PROJECT_ROOT, "subdataset", "ogbn_arxiv_16k_ffs_sample.pt")
 
-# --- 🚨 데이터셋 로드 가정 (성공한 loader.py 코드 이후) ---
-# dataset 변수는 PygNodePropPredDataset(name="ogbn-arxiv") 결과라고 가정합니다.
 
-# 예시를 위해 PyG 객체만 준비 (실제 환경에서는 loader.py에서 로드된 dataset 사용)
-from ogb.nodeproppred import PygNodePropPredDataset
+def load_trusted_ogbn_arxiv(dataset_class):
+    """OGB가 생성한 PyG 캐시를 PyTorch 2.6+에서 호환되게 읽는다.
 
-# 
-# PyG 데이터셋 로딩 (실제 프로젝트에서는 이미 메모리에 로드되어 있을 수 있음)
-# OGB 로드 시 필요한 안전 목록 추가 코드는 이미 파일 상단에 있다고 가정합니다.
-dataset = PygNodePropPredDataset(name = "ogbn-arxiv")
-graph_data = dataset[0] # PyG Data 객체 획득
-TOTAL_NODES = graph_data.num_nodes # 169,343개
-
-# --- FFS 파라미터 설정 ---
-TARGET_SIZE = 16000     # 목표 샘플 노드 수
-PF_VALUE = 0.75         # 번짐 확률 (Burning Probability)
-
-def to_networkx_graph(data):
-    """PyG Data 객체를 NetworkX DiGraph(방향성 그래프)로 변환합니다."""
-    G = nx.DiGraph() 
-    
-    # 노드 인덱스를 노드로 추가 (0부터 N-1까지)
-    G.add_nodes_from(range(data.num_nodes))
-
-    # 엣지 추가 (edge_index 텐서 사용)
-    # 엣지 방향: 인용하는 논문(source) -> 인용 당하는 논문(target)
-    source_nodes = data.edge_index[0].tolist()
-    target_nodes = data.edge_index[1].tolist()
-    edges = list(zip(source_nodes, target_nodes))
-    
-    G.add_edges_from(edges)
-    
-    return G
-
-# PyG 그래프를 NetworkX 그래프로 변환
-citation_graph = to_networkx_graph(graph_data)
-print(f"✅ PyG 객체를 NetworkX DiGraph로 변환 완료. 엣지 수: {citation_graph.number_of_edges()}")
-
-def forest_fire_sampling(graph, target_size, pf=0.75):
+    OGB의 ``dataset_pyg.py``는 ``torch.load`` 인자를 전달하지 않는다. PyTorch
+    2.6부터 기본값이 ``weights_only=True``로 바뀌어 PyG의 ``Data`` 객체 캐시를
+    읽지 못하므로, OGB 공식 데이터셋 생성 중에만 이전 동작을 적용한다. 캐시는
+    사용자가 신뢰하는 OGB 데이터 디렉터리의 파일이어야 한다.
     """
-    Forest Fire Sampling을 수행하여 목표 노드 수만큼 추출합니다.
-    """
-    sampled_nodes = set()
-    all_nodes = list(graph.nodes())
-    p_b = 1.0 - pf # 번짐 실패 확률
+    original_torch_load = torch.load
 
-    while len(sampled_nodes) < target_size:
-        
-        # 1. 시작 노드 선택 (아직 샘플링되지 않은 노드 중에서 무작위 선택)
-        remaining_nodes = list(set(all_nodes) - sampled_nodes)
-        if not remaining_nodes:
+    def load_with_full_pickle(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_torch_load(*args, **kwargs)
+
+    torch.load = load_with_full_pickle
+    try:
+        return dataset_class(name="ogbn-arxiv", root=os.path.join(PROJECT_ROOT, "dataset"))
+    finally:
+        torch.load = original_torch_load
+
+
+def to_networkx_graph(data) -> nx.DiGraph:
+    """PyG citation graph를 방향 그래프로 변환한다."""
+    graph = nx.DiGraph()
+    graph.add_nodes_from(range(data.num_nodes))
+    graph.add_edges_from(zip(data.edge_index[0].tolist(), data.edge_index[1].tolist()))
+    return graph
+
+
+def balanced_quotas(labels: Iterable[int], target_size: int) -> Dict[int, int]:
+    """가능한 한 모든 카테고리에 같은 수를 배정한다."""
+    counts = Counter(labels)
+    categories = sorted(counts)
+    if target_size <= 0:
+        raise ValueError("target_size는 1 이상이어야 합니다.")
+    if target_size > sum(counts.values()):
+        raise ValueError("target_size가 전체 노드 수보다 큽니다.")
+
+    base, _ = divmod(target_size, len(categories))
+    quotas = {category: min(base, counts[category]) for category in categories}
+    remaining = target_size - sum(quotas.values())
+
+    # 희소 카테고리와 나머지로 생긴 잔여분을 아직 여유가 있는 카테고리에 순환 배정한다.
+    while remaining:
+        progressed = False
+        for category in categories:
+            if remaining == 0:
+                break
+            if quotas[category] < counts[category]:
+                quotas[category] += 1
+                remaining -= 1
+                progressed = True
+        if not progressed:
+            raise RuntimeError("카테고리 쿼터를 배정할 수 없습니다.")
+    return quotas
+
+
+def balanced_forest_fire_sampling(
+    graph: nx.DiGraph,
+    labels: List[int],
+    target_size: int,
+    pf: float,
+    rng: random.Random,
+    np_rng: np.random.Generator,
+) -> List[int]:
+    """카테고리 쿼터를 넘지 않는 Forest Fire 샘플링을 수행한다.
+
+    확장 과정에서 이미 쿼터를 채운 레이블은 건너뛴다. 고립 노드나 희소 연결로
+    Forest Fire가 채우지 못한 쿼터는 동일 카테고리의 미선택 노드로 보충한다.
+    """
+    if not 0 < pf < 1:
+        raise ValueError("pf는 0과 1 사이여야 합니다.")
+    if len(labels) != graph.number_of_nodes():
+        raise ValueError("labels 길이와 그래프 노드 수가 일치해야 합니다.")
+
+    quotas = balanced_quotas(labels, target_size)
+    nodes_by_category: Dict[int, List[int]] = {category: [] for category in quotas}
+    for node, label in enumerate(labels):
+        nodes_by_category[label].append(node)
+
+    sampled: set[int] = set()
+    sampled_counts: Counter[int] = Counter()
+    p_b = 1.0 - pf
+
+    def can_add(node: int) -> bool:
+        return node not in sampled and sampled_counts[labels[node]] < quotas[labels[node]]
+
+    # 모든 카테고리의 seed pool에서 시작하므로 시작점부터 균형을 보장한다.
+    while len(sampled) < target_size:
+        available_categories = [
+            category for category, quota in quotas.items() if sampled_counts[category] < quota
+        ]
+        if not available_categories:
             break
-            
-        start_node = random.choice(remaining_nodes) 
-        queue = deque([start_node])
-        
-        while queue and len(sampled_nodes) < target_size:
-            
-            current_node = queue.popleft()
+        category = rng.choice(available_categories)
+        candidates = [node for node in nodes_by_category[category] if node not in sampled]
+        if not candidates:
+            raise RuntimeError(f"카테고리 {category}의 쿼터를 채울 노드가 없습니다.")
 
-            if current_node not in sampled_nodes:
-                sampled_nodes.add(current_node)
+        queue = deque([rng.choice(candidates)])
+        while queue and len(sampled) < target_size:
+            current = queue.popleft()
+            if not can_add(current):
+                continue
+            sampled.add(current)
+            sampled_counts[labels[current]] += 1
 
-                # 2. 이웃 노드 획득 (current_node가 인용하는 논문)
-                neighbors = list(graph.successors(current_node)) 
-                unvisited_neighbors = [n for n in neighbors if n not in sampled_nodes]
-                
-                if not unvisited_neighbors:
-                    continue
+            eligible_neighbors = [node for node in graph.successors(current) if can_add(node)]
+            if eligible_neighbors:
+                num_to_burn = min(
+                    int(np_rng.geometric(p=p_b) - 1), len(eligible_neighbors)
+                )
+                if num_to_burn:
+                    queue.extend(rng.sample(eligible_neighbors, num_to_burn))
 
-                # 3. 기하 분포를 사용한 번짐 수 결정
-                num_to_burn = max(0, np.random.geometric(p=p_b) - 1) 
-                num_to_burn = min(num_to_burn, len(unvisited_neighbors))
+    # FFS가 도달하지 못한 노드를 같은 카테고리 pool에서 보충한다.
+    for category, quota in quotas.items():
+        missing = quota - sampled_counts[category]
+        if missing:
+            candidates = [node for node in nodes_by_category[category] if node not in sampled]
+            sampled.update(rng.sample(candidates, missing))
 
-                # 4. 선택된 이웃 노드를 큐에 추가
-                burned_neighbors = random.sample(unvisited_neighbors, num_to_burn)
-                queue.extend(burned_neighbors)
-                
-    # 목표 크기에 맞춰 16000개만 반환
-    return list(sampled_nodes)[:target_size]
+    result = list(sampled)
+    rng.shuffle(result)  # 저장 순서가 카테고리 순서가 되지 않도록 한다.
+    assert len(result) == target_size
+    assert Counter(labels[node] for node in result) == quotas
+    return result
 
-# --- FFS 최종 실행 ---
 
-sampled_node_list = forest_fire_sampling(citation_graph, TARGET_SIZE, pf=PF_VALUE)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="카테고리 균형 Forest Fire 샘플링")
+    parser.add_argument("--target-size", type=int, default=16000)
+    parser.add_argument("--pf", type=float, default=0.75, help="Forest Fire 확장 확률")
+    parser.add_argument("--seed", type=int, default=42, help="재현 가능한 난수 시드")
+    parser.add_argument("--output", default=DEFAULT_OUTPUT)
+    return parser.parse_args()
 
-print("-" * 50)
-print(f"✅ Forest Fire Sampling 완료. 최종 노드 수: **{len(sampled_node_list)}개**")
-print(f"사용된 번짐 확률 (Pf): {PF_VALUE}")
-print(f"추출된 샘플 노드 인덱스 예시: {sampled_node_list[:5]}")
-print("-" * 50)
 
-# FFS 결과 인덱스를 PyTorch Tensor로 변환
-sample_indices_tensor = torch.tensor(sampled_node_list, dtype=torch.long)
+def main() -> None:
+    try:
+        from ogb.nodeproppred import PygNodePropPredDataset
+    except ImportError as exc:
+        raise SystemExit(
+            "PygNodePropPredDataset를 사용하려면 torch-geometric이 필요합니다. "
+            "현재 설치된 CUDA PyTorch를 유지하려면 다음을 실행하세요:\n"
+            "  uv pip install --python venv/bin/python torch-geometric\n"
+            "그 후 이 스크립트를 다시 실행하세요."
+        ) from exc
 
-# 16,000개 샘플의 피처 데이터 (16000 x 128)
-sample_features = graph_data.x[sample_indices_tensor] 
+    args = parse_args()
+    dataset = load_trusted_ogbn_arxiv(PygNodePropPredDataset)
+    graph_data = dataset[0]
+    labels = graph_data.y.view(-1).tolist()
+    graph = to_networkx_graph(graph_data)
+    print(f"citation graph: nodes={graph.number_of_nodes():,}, edges={graph.number_of_edges():,}")
 
-# 16,000개 샘플의 레이블 데이터 (16000 x 1)
-sample_labels = graph_data.y[sample_indices_tensor]
+    sampled_nodes = balanced_forest_fire_sampling(
+        graph, labels, args.target_size, args.pf, random.Random(args.seed), np.random.default_rng(args.seed)
+    )
+    sample_indices = torch.tensor(sampled_nodes, dtype=torch.long)
+    sample_labels = graph_data.y[sample_indices]
+    distribution = Counter(sample_labels.view(-1).tolist())
+    print(f"균형 샘플링 완료: {len(sampled_nodes):,}개, 카테고리 수={len(distribution)}")
+    print("카테고리별 표본 수:", dict(sorted(distribution.items())))
 
-FILE_NAME = 'ogbn_arxiv_16k_ffs_sample.pt'
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+    torch.save(
+        {
+            "indices": sampled_nodes,
+            "features": graph_data.x[sample_indices],
+            "labels": sample_labels,
+            "sampling": {
+                "method": "balanced_forest_fire",
+                "target_size": args.target_size,
+                "pf": args.pf,
+                "seed": args.seed,
+                "category_counts": dict(sorted(distribution.items())),
+            },
+        },
+        args.output,
+    )
+    print(f"저장 완료: {args.output}")
 
-torch.save({
-    'indices': sampled_node_list,  # 파이썬 리스트 형태로 인덱스 저장
-    'features': sample_features,   # 텐서 형태로 피처 저장
-    'labels': sample_labels        # 텐서 형태로 레이블 저장
-}, FILE_NAME)
 
-print(f"✅ FFS 샘플링 데이터 저장 완료: **{FILE_NAME}**")
-print(f"저장된 피처 텐서 크기: {sample_features.shape}")
+if __name__ == "__main__":
+    main()

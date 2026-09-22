@@ -2,7 +2,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PROJECT_ROOT=/workspace
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
-COPY requirements.txt requirements-docker.txt ./
+COPY requirements.txt requirements-common.txt requirements-docker.txt ./
 ARG INSTALL_ML_DEPS=true
 RUN if [ "$INSTALL_ML_DEPS" = "true" ]; then \
       python -m pip install --upgrade pip && \

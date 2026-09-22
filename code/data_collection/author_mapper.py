@@ -1,153 +1,136 @@
-import torch
+"""균형 표본 논문의 OpenAlex 저자 정보를 안정 ID로 수집한다."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import time
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
 import requests
-import json
-import time
-import os
-import sys
+import torch
 
-# --- 1. 사용자 설정 ---
-# 이메일을 넣으면 OpenAlex가 더 빠르게 처리해줍니다.
-USER_EMAIL = "test@example.com" 
-
-# --- 2. 경로 설정 ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
-
-FFS_LOAD_FILE = os.path.join(project_root, 'subdataset', 'ogbn_arxiv_16k_ffs_sample.pt')
-NODE_TO_ID_MAP_PATH = os.path.join(project_root, 'dataset', 'ogbn_arxiv', 'mapping', 'nodeidx2paperid.csv')
-OUTPUT_DIR = os.path.join(project_root, 'output')
-OUTPUT_AUTHOR_FILE = os.path.join(OUTPUT_DIR, 'author_data_openalex.json')
-
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
-
-# 안전하게 40개씩 처리
-BATCH_SIZE = 40
-
-# --- 3. 데이터 로드 ---
-print(f"OpenAlex API 모드 시작... (이메일: {USER_EMAIL})")
-
-_real_torch_load = torch.load
-def _torch_load_with_weights_only_false(*args, **kwargs):
-    if "weights_only" not in kwargs:
-        kwargs["weights_only"] = False
-    return _real_torch_load(*args, **kwargs)
-torch.load = _torch_load_with_weights_only_false 
-
-try:
-    if not os.path.exists(FFS_LOAD_FILE):
-        sys.exit(f"샘플 파일 없음: {FFS_LOAD_FILE}")
-        
-    loaded_data = torch.load(FFS_LOAD_FILE)
-    sampled_indices = set(loaded_data['indices']) 
-    print(f"FFS 샘플 로드 완료: {len(sampled_indices)}개")
-
-    if not os.path.exists(NODE_TO_ID_MAP_PATH):
-        sys.exit(f"매핑 파일 없음: {NODE_TO_ID_MAP_PATH}")
-
-    mapping_df = pd.read_csv(NODE_TO_ID_MAP_PATH)
-    mapping_df.columns = [str(c).strip().lower() for c in mapping_df.columns]
-    
-    if 'node idx' in mapping_df.columns: mapping_df.rename(columns={'node idx': 'idx'}, inplace=True)
-    if 'idx' not in mapping_df.columns: 
-        mapping_df.rename(columns={mapping_df.columns[0]: 'idx', mapping_df.columns[1]: 'paper id'}, inplace=True)
-
-    target_mapping = mapping_df[mapping_df['idx'].isin(sampled_indices)].copy()
-    print(f"매핑 대상: {len(target_mapping)}개")
-
-except Exception as e:
-    sys.exit(f"초기화 에러: {e}")
+ROOT = Path(__file__).resolve().parents[2]
+SAMPLE = ROOT / "subdataset" / "ogbn_arxiv_16k_ffs_sample.pt"
+MAPPING_PATHS = [
+    ROOT / "dataset" / "ogbn_arxiv" / "mapping" / "nodeidx2paperid.csv.gz",
+    ROOT / "dataset" / "ogbn_arxiv" / "mapping" / "nodeidx2paperid.csv",
+]
+DEFAULT_OUTPUT = ROOT / "output" / "author_data_openalex.json"
+API_URL = "https://api.openalex.org/works"
 
 
-# --- 4. OpenAlex API 함수 (수정됨) ---
-def fetch_authors_openalex(node_to_paper_map):
-    results = {}
-    items = list(node_to_paper_map.items()) 
-    total = len(items)
-    
-    print(f"OpenAlex 호출 시작 (총 {total}건, Batch {BATCH_SIZE})...")
-    
-    base_url = "https://api.openalex.org/works"
-    
-    for i in range(0, total, BATCH_SIZE):
-        batch_items = items[i : i + BATCH_SIZE]
-        
-        # [수정된 부분] 'mag:' 접두사 제거! 순수 ID 숫자만 파이프로 연결
-        # item[1]이 Paper ID (MAG ID)
-        mag_ids_str = "|".join([str(item[1]).strip() for item in batch_items])
-        
-        params = {
-            "filter": f"ids.mag:{mag_ids_str}", # 여기에 ids.mag: 가 이미 있으므로 뒤에는 숫자만 옴
-            "per_page": BATCH_SIZE,
-            "select": "ids,authorships" 
-        }
-        
-        if USER_EMAIL != "test@example.com":
-            params["mailto"] = USER_EMAIL
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="OpenAlex 저자 수집")
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--batch-size", type=int, default=40)
+    parser.add_argument("--mailto", default=os.getenv("OPENALEX_MAILTO", ""))
+    parser.add_argument("--limit", type=int, help="연결 검증용 최대 논문 수")
+    parser.add_argument("--overwrite", action="store_true")
+    return parser.parse_args()
 
+
+def load_targets(limit: int | None) -> list[tuple[int, str]]:
+    mapping_path = next((path for path in MAPPING_PATHS if path.exists()), None)
+    if mapping_path is None:
+        raise FileNotFoundError("nodeidx2paperid.csv(.gz)를 찾을 수 없습니다.")
+    sample = torch.load(SAMPLE, weights_only=False, map_location="cpu")
+    indices = [int(index) for index in sample["indices"]]
+    mapping = pd.read_csv(mapping_path)
+    mapping.columns = [str(column).strip().lower() for column in mapping.columns]
+    mapping = mapping.rename(columns={"node idx": "node_idx", "paper id": "paper_id"})
+    if not {"node_idx", "paper_id"}.issubset(mapping.columns):
+        raise ValueError(f"매핑 파일 컬럼 오류: {mapping.columns.tolist()}")
+    node_to_paper = dict(zip(mapping.node_idx.astype(int), mapping.paper_id.astype(str)))
+    missing = [node for node in indices if node not in node_to_paper]
+    if missing:
+        raise ValueError(f"표본 노드 {len(missing)}개의 paper_id가 없습니다.")
+    targets = [(node, node_to_paper[node]) for node in indices]
+    return targets[:limit] if limit else targets
+
+
+def load_records(path: Path, overwrite: bool) -> dict[int, dict[str, Any]]:
+    if overwrite or not path.exists():
+        return {}
+    with path.open(encoding="utf-8") as file:
+        return {int(record["node_idx"]): record for record in json.load(file)}
+
+
+def save_records(path: Path, records: dict[int, dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as file:
+        json.dump([records[key] for key in sorted(records)], file, ensure_ascii=False, indent=2)
+    temporary.replace(path)
+
+
+def parse_authors(authorships: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    authors = []
+    for position, authorship in enumerate(authorships, start=1):
+        author = authorship.get("author") or {}
+        author_id = author.get("id")
+        if author_id:
+            authors.append({
+                "author_id": str(author_id),
+                "author_name": author.get("display_name") or "Unknown",
+                "author_position": authorship.get("author_position") or position,
+            })
+    return authors
+
+
+def fetch_batch(session: requests.Session, batch: list[tuple[int, str]], mailto: str) -> dict[int, list[dict[str, Any]]]:
+    requested = {str(paper_id): node for node, paper_id in batch}
+    params = {"filter": "ids.mag:" + "|".join(requested), "per-page": len(batch), "select": "ids,authorships"}
+    if mailto:
+        params["mailto"] = mailto
+    for attempt in range(4):
         try:
-            response = requests.get(base_url, params=params, timeout=20)
-            
-            if response.status_code == 200:
-                data = response.json()
-                results_list = data.get('results', [])
-                
-                # 매핑용 임시 딕셔너리
-                batch_result_map = {}
-                for work in results_list:
-                    # 결과에서 MAG ID 찾기 (숫자형일 수 있으므로 문자열로 통일)
-                    mag_val = work.get('ids', {}).get('mag')
-                    if mag_val:
-                        authorships = work.get('authorships', [])
-                        names = [a.get('author', {}).get('display_name') for a in authorships]
-                        names = [n for n in names if n]
-                        batch_result_map[str(mag_val)] = names
-                
-                # 원본 요청 순서대로 결과 저장
-                for idx, pid in batch_items:
-                    authors = batch_result_map.get(str(pid), [])
-                    results[idx] = authors
-                    
-            else:
-                print(f"API 오류 {response.status_code} (Batch {i}). 요청 URL 확인 필요.")
-                # 디버깅을 위해 실패한 URL 일부 출력
-                print(f"   (Failed Params: {params['filter'][:50]}...)")
-                for idx, _ in batch_items: results[idx] = []
-                
-        except Exception as e:
-            print(f"네트워크/파싱 오류: {e}")
-            for idx, _ in batch_items: results[idx] = []
-            
-        # 진행률
-        if (i + BATCH_SIZE) % 1000 < BATCH_SIZE:
-            current = min(i + BATCH_SIZE, total)
-            print(f"  - {current}/{total} 완료 ({current/total*100:.1f}%)")
-            
-        time.sleep(0.1) # OpenAlex는 매우 빠르므로 짧은 대기만
-        
-    return results
+            response = session.get(API_URL, params=params, timeout=30)
+            if response.status_code == 429 or response.status_code >= 500:
+                time.sleep(2**attempt)
+                continue
+            response.raise_for_status()
+            result = {node: [] for node, _ in batch}
+            for work in response.json().get("results", []):
+                mag_id = str((work.get("ids") or {}).get("mag") or "")
+                if mag_id in requested:
+                    result[requested[mag_id]] = parse_authors(work.get("authorships") or [])
+            return result
+        except requests.RequestException as exc:
+            if attempt == 3:
+                raise RuntimeError(f"OpenAlex 요청 실패: {exc}") from exc
+            time.sleep(2**attempt)
+    raise RuntimeError("OpenAlex 재시도 한도 초과")
 
-# --- 5. 실행 및 저장 ---
-node_to_paper = dict(zip(target_mapping['idx'], target_mapping['paper id']))
 
-author_map_result = fetch_authors_openalex(node_to_paper)
+def main() -> None:
+    args = parse_args()
+    if not 1 <= args.batch_size <= 100:
+        raise SystemExit("--batch-size는 1~100 사이여야 합니다.")
+    if not SAMPLE.exists():
+        raise SystemExit(f"샘플 파일 없음: {SAMPLE}")
+    targets = load_targets(args.limit)
+    records = load_records(args.output, args.overwrite)
+    pending = [(node, paper) for node, paper in targets if node not in records]
+    print(f"저자 수집: 전체 {len(targets):,}편 / 남은 작업 {len(pending):,}편")
+    with requests.Session() as session:
+        for start in range(0, len(pending), args.batch_size):
+            batch = pending[start:start + args.batch_size]
+            authors_by_node = fetch_batch(session, batch, args.mailto)
+            for node, paper_id in batch:
+                records[node] = {"node_idx": node, "paper_id": paper_id, "authors": authors_by_node[node]}
+            save_records(args.output, records)
+            done = min(start + len(batch), len(pending))
+            found = sum(bool(records[node]["authors"]) for node, _ in targets if node in records)
+            print(f"  {done:,}/{len(pending):,} 완료 | 저자 매칭 {found:,}/{len(targets):,}")
+            time.sleep(0.15)
+    selected = {node for node, _ in targets}
+    if selected - set(records):
+        raise RuntimeError("일부 표본의 저자 결과가 저장되지 않았습니다.")
+    print(f"저장 완료: {args.output}")
 
-final_data = []
-for idx, authors in author_map_result.items():
-    final_data.append({
-        "node_idx": int(idx),
-        "paper_id": node_to_paper[idx],
-        "authors": authors
-    })
 
-found_count = sum(1 for item in final_data if item['authors'])
-print("-" * 50)
-print(f"수집 완료!")
-print(f"총 요청: {len(final_data)}건")
-print(f"저자 찾음: {found_count}건 ({found_count/len(final_data)*100:.1f}%)")
-
-with open(OUTPUT_AUTHOR_FILE, 'w', encoding='utf-8') as f:
-    json.dump(final_data, f, ensure_ascii=False, indent=4)
-
-print(f"파일 저장됨: {OUTPUT_AUTHOR_FILE}")
+if __name__ == "__main__":
+    main()

@@ -198,7 +198,7 @@ V4 모델은 논문 인용 그래프뿐 아니라 다음 정보를 하나의 추
 
 전처리 데이터를 새로 만들 때의 주요 단계는 다음과 같습니다.
 
-1. `code/data_collection/forest_fire.py`: OGBN-Arxiv 그래프를 약 1.6만 노드로 샘플링
+1. `code/data_collection/forest_fire.py`: OGBN-Arxiv 그래프를 약 1.6만 노드로 카테고리 균형 Forest Fire 샘플링 (희소 레이블은 전량 사용 후 나머지를 균등 재배분)
 2. `code/data_collection/author_mapper.py`: OpenAlex에서 저자 정보 수집
 3. `code/data_analysis/llm_keyword_extraction.py`: 제목과 초록에서 LLM 지식 추출
 4. `code/data_collection/author_paper_edges.py`, `paper_paper_edge.py`: 그래프 에지 생성
