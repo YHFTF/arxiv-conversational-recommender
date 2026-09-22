@@ -1,65 +1,59 @@
+"""Extract citation edges whose two endpoints belong to the 16k sample."""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
 import pandas as pd
 import torch
-import os
-import json
-import numpy as np
 
-# --- 경로 설정 ---
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-SUBDATASET_DIR = os.path.join(project_root, 'subdataset')
-MASTER_DATA_FILE = os.path.join(SUBDATASET_DIR, 'arxiv_master_final.json')
-# ⭐ MAG ID와 내부 인덱스를 연결해주는 원본 매핑 파일
-MAPPING_CSV = os.path.join(project_root, 'dataset', 'ogbn_arxiv', 'mapping', 'nodeidx2paperid.csv')
-ORIGINAL_EDGE_FILE = r"C:\Users\Arachne\OneDrive\Desktop\arxiv-conversational-recommender-main\dataset\ogbn_arxiv\raw\edge.csv.gz"
-OUTPUT_EDGE_FILE = os.path.join(SUBDATASET_DIR, 'paper_paper_edges.pt')
 
-def rebuild_sub_edge_index_final():
-    print(f"[System] 1. ID 변환 매핑 로드 중...")
-    # nodeidx2paperid.csv 로드 (node idx, paper id 컬럼)
-    map_df = pd.read_csv(MAPPING_CSV)
-    # MAG ID(paper id) -> 내부 인덱스(node idx) 딕셔너리 생성
-    mag_to_internal = dict(zip(map_df['paper id'].astype(str), map_df['node idx']))
+ROOT = Path(__file__).resolve().parents[2]
 
-    print(f"[System] 2. 마스터 JSON 분석 중...")
-    with open(MASTER_DATA_FILE, 'r', encoding='utf-8') as f:
-        master_data = json.load(f)
 
-    # {내부_인덱스: 새_node_idx} 매핑 생성
-    # 예: {104447: 14, ...}
-    internal_to_new = {}
-    for item in master_data:
-        mag_id = str(item['paper_id'])
-        new_idx = item['node_idx']
-        
-        if mag_id in mag_to_internal:
-            internal_id = mag_to_internal[mag_id]
-            internal_to_new[internal_id] = new_idx
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="표본 내부 OGBN-Arxiv 인용 엣지 추출")
+    parser.add_argument("--sample-path", type=Path, default=ROOT / "subdataset/ogbn_arxiv_16k_ffs_sample.pt")
+    parser.add_argument("--edge-path", type=Path, default=ROOT / "dataset/ogbn_arxiv/raw/edge.csv.gz")
+    parser.add_argument("--output-path", type=Path, default=ROOT / "subdataset/paper_paper_edges.pt")
+    parser.add_argument("--report-path", type=Path, default=ROOT / "output/paper_paper_edge_report.json")
+    return parser.parse_args()
 
-    valid_internal_ids = set(internal_to_new.keys())
-    print(f"💡 매핑 완료: {len(internal_to_new)}개 노드 연결됨")
 
-    print(f"[System] 3. 원본 에지 파일 로딩 및 필터링...")
-    edges = pd.read_csv(ORIGINAL_EDGE_FILE, compression='gzip', header=None, names=['src', 'dst'])
-    
-    # 이제 src, dst(내부 인덱스)가 valid_internal_ids에 있는지 확인 가능!
-    sub_edges = edges[edges['src'].isin(valid_internal_ids) & edges['dst'].isin(valid_internal_ids)].copy()
-    print(f"✅ 필터링 완료: {len(sub_edges):,}개의 인용 관계 발견")
+def main() -> None:
+    args = parse_args()
+    sample = torch.load(args.sample_path, weights_only=False, map_location="cpu")
+    sampled_nodes = {int(node) for node in sample["indices"]}
+    if len(sampled_nodes) != len(sample["indices"]):
+        raise ValueError("표본 indices에 중복 노드가 있습니다.")
 
-    if len(sub_edges) == 0:
-        print("❗ 여전히 0개입니다. 매핑 파일의 컬럼명을 확인해보세요.")
-        return
+    # OGB raw edge.csv.gz has no header and stores original OGB node indices.
+    edges = pd.read_csv(args.edge_path, compression="gzip", header=None, names=["src", "dst"], dtype="int64")
+    inside = edges["src"].isin(sampled_nodes) & edges["dst"].isin(sampled_nodes)
+    sub_edges = edges.loc[inside, ["src", "dst"]].drop_duplicates().sort_values(["src", "dst"])
+    if sub_edges.empty:
+        raise RuntimeError("표본 내부 인용 엣지가 0개입니다. 표본과 원본 edge 파일을 확인하세요.")
+    edge_index = torch.tensor(sub_edges.to_numpy().T.copy(), dtype=torch.long)
+    if not torch.isin(edge_index, torch.tensor(sorted(sampled_nodes))).all():
+        raise AssertionError("표본 밖 노드가 인용 엣지에 포함되었습니다.")
 
-    # 4. 새 인덱스(0~15999)로 최종 변환
-    sub_edges['src_new'] = sub_edges['src'].map(internal_to_new)
-    sub_edges['dst_new'] = sub_edges['dst'].map(internal_to_new)
-    
-    edge_index = torch.from_numpy(np.stack([
-        sub_edges['src_new'].values, 
-        sub_edges['dst_new'].values
-    ])).long()
-    
-    torch.save(edge_index, OUTPUT_EDGE_FILE)
-    print(f"🚀 저장 성공: {OUTPUT_EDGE_FILE}")
+    args.output_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(edge_index, args.output_path)
+    report = {
+        "sampled_papers": len(sampled_nodes),
+        "source_edges": len(edges),
+        "internal_citation_edges": int(edge_index.size(1)),
+        "unique_source_papers": int(edge_index[0].unique().numel()),
+        "unique_target_papers": int(edge_index[1].unique().numel()),
+        "edge_node_ids": "original_ogbn_node_idx",
+    }
+    args.report_path.parent.mkdir(parents=True, exist_ok=True)
+    with args.report_path.open("w", encoding="utf-8") as handle:
+        json.dump(report, handle, ensure_ascii=False, indent=2)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    print(f"저장: {args.output_path}")
+
 
 if __name__ == "__main__":
-    rebuild_sub_edge_index_final()
+    main()

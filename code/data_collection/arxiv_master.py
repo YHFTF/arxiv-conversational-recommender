@@ -1,116 +1,121 @@
+"""Map balanced-sample papers to OpenAlex metadata and Luna D/T/M output."""
+from __future__ import annotations
+
+import argparse
 import json
-import os
+from collections import Counter
+from pathlib import Path
+from typing import Any
 
-# 경로 설정
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
+import torch
 
-OA_FILE = os.path.join(project_root, 'output', 'author_data_openalex.json')
-LLM_FILE = os.path.join(project_root, 'output', '3llm_extraction_results.json')
-TSV_FILE = os.path.join(project_root, 'subdataset', 'titleabs.tsv')
-OUTPUT_FILE = os.path.join(project_root, 'subdataset', 'arxiv_master_final.json')
+ROOT = Path(__file__).resolve().parents[2]
 
-def build_final_json_brute_force():
-    print("🚀 [데이터 통합 시작: OpenAlex + TSV + LLM]")
 
-    # 1. TSV 로드 (ID를 키로, 제목과 초록을 저장)
-    id_to_content = {}
-    print(f"📖 TSV 파일을 인덱싱 중... ({TSV_FILE})")
-    
-    try:
-        with open(TSV_FILE, 'r', encoding='utf-8') as f:
-            for line_idx, line in enumerate(f):
-                line = line.strip()
-                if not line: continue
-                
-                # 탭(\t)으로 분리: [0]=ID, [1]=Title, [2]=Abstract
-                parts = line.split('\t')
-                
-                if len(parts) >= 2:
-                    p_id = parts[0].strip()
-                    title = parts[1].strip()
-                    # 초록이 없을 경우를 대비해 예외 처리
-                    abstract = parts[2].strip() if len(parts) > 2 else ""
-                    
-                    id_to_content[p_id] = {
-                        "title": title,
-                        "abstract": abstract
-                    }
-    except FileNotFoundError:
-        print(f"❌ 에러: {TSV_FILE} 파일을 찾을 수 없습니다.")
-        return
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="16k 표본과 Luna D/T/M을 정렬해 마스터를 생성")
+    parser.add_argument("--sample-path", type=Path, default=ROOT / "subdataset/ogbn_arxiv_16k_ffs_sample.pt")
+    parser.add_argument("--text-path", type=Path, default=ROOT / "subdataset/titleabs.tsv")
+    parser.add_argument("--author-path", type=Path, default=ROOT / "output/author_data_openalex.json")
+    parser.add_argument("--dtm-path", type=Path, default=ROOT / "output/dtm_luna_16k/gpt-5.6-luna.json")
+    parser.add_argument("--master-path", type=Path, default=ROOT / "subdataset/arxiv_master_final.json")
+    parser.add_argument("--meta-path", type=Path, default=ROOT / "output/knowledge_meta.json")
+    parser.add_argument("--report-path", type=Path, default=ROOT / "output/knowledge_mapping_report.json")
+    return parser.parse_args()
 
-    # 2. JSON 데이터 로드
-    with open(OA_FILE, 'r', encoding='utf-8') as f:
-        oa_raw = json.load(f)
-    
-    # LLM 파일이 없을 경우를 대비해 빈 리스트로 처리
-    try:
-        with open(LLM_FILE, 'r', encoding='utf-8') as f:
-            llm_raw = json.load(f)
-    except FileNotFoundError:
-        print("⚠️ 경고: LLM 추출 결과 파일이 없습니다. 기본값으로 채웁니다.")
-        llm_raw = []
-    
-    llm_map = {item['node_idx']: item for item in llm_raw}
 
-    # 3. 통합 작업
-    final_master_list = []
-    success_count = 0
+def read_json(path: Path) -> Any:
+    with path.open(encoding="utf-8") as handle:
+        return json.load(handle)
 
-    print(f"🔗 ID 매칭 중 (대상 데이터: {len(oa_raw)}건)...")
-    for oa_item in oa_raw:
-        n_idx = oa_item['node_idx']
-        # paper_id를 문자열로 변환하여 TSV 키와 맞춤
-        p_id = str(oa_item['paper_id']).strip()
-        
-        # TSV에서 데이터 검색
-        content = id_to_content.get(p_id)
-        
-        if content:
-            title = content['title']
-            abstract = content['abstract']
-            success_count += 1
-        else:
-            title = "Unknown"
-            abstract = "Unknown"
 
-        # LLM 지식 정보 매칭
-        knowledge = llm_map.get(n_idx, {})
+def unique_terms(value: Any) -> list[str]:
+    result, seen = [], set()
+    for item in value if isinstance(value, list) else []:
+        term = str(item).strip()
+        if term and term.casefold() not in seen:
+            result.append(term)
+            seen.add(term.casefold())
+    return result
 
-        final_master_list.append({
-            "node_idx": n_idx,
-            "paper_id": p_id, # 원래 필드명 유지 (또는 arxiv_id)
-            "title": title,
-            "abstract": abstract,
-            "authors": oa_item.get('authors', []),
-            "knowledge": {
-                "domain": knowledge.get("domain", []),
-                "task": knowledge.get("task", []),
-                "method": knowledge.get("method", [])
-            }
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+    temporary.replace(path)
+
+
+def load_texts(path: Path, wanted_ids: set[str]) -> dict[str, tuple[str, str]]:
+    texts = {}
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            paper_id, sep, content = line.rstrip("\n").partition("\t")
+            if not sep or paper_id not in wanted_ids:
+                continue
+            title, sep, abstract = content.partition("\t")
+            if sep and title.strip() and abstract.strip():
+                texts[paper_id] = (title.strip(), abstract.strip())
+    return texts
+
+
+def vocabulary(values: list[str]) -> dict[str, int]:
+    return {term: i for i, term in enumerate(sorted(set(values), key=str.casefold), start=1)}
+
+
+def main() -> None:
+    args = parse_args()
+    sample = torch.load(args.sample_path, weights_only=False, map_location="cpu")
+    sample_nodes = [int(node) for node in sample["indices"]]
+    if len(sample_nodes) != len(set(sample_nodes)):
+        raise ValueError("표본에 중복 node_idx가 있습니다.")
+    expected = set(sample_nodes)
+    authors = {int(row["node_idx"]): row for row in read_json(args.author_path)}
+    dtm_rows = {int(row["node_idx"]): row for row in read_json(args.dtm_path)}
+    for name, rows in (("OpenAlex", authors), ("Luna D/T/M", dtm_rows)):
+        missing, unexpected = expected - set(rows), set(rows) - expected
+        if missing or unexpected:
+            raise ValueError(f"{name}와 표본 불일치: missing={len(missing)}, unexpected={len(unexpected)}")
+    paper_ids = {str(authors[node]["paper_id"]).strip() for node in sample_nodes}
+    texts = load_texts(args.text_path, paper_ids)
+    if missing := paper_ids - set(texts):
+        raise ValueError(f"제목·초록 누락 {len(missing)}편: {sorted(missing)[:3]}")
+
+    master, all_domains, all_tasks, all_methods = [], [], [], []
+    statuses: Counter[str] = Counter()
+    for local_idx, node_idx in enumerate(sample_nodes):
+        author, dtm = authors[node_idx], dtm_rows[node_idx]
+        paper_id = str(author["paper_id"]).strip()
+        status = str(dtm.get("status", "missing"))
+        source = dtm.get("knowledge", {}) if status == "success" else {}
+        knowledge = {key: unique_terms(source.get(key, [])) for key in ("domain", "task", "method")}
+        all_domains.extend(knowledge["domain"])
+        all_tasks.extend(knowledge["task"])
+        all_methods.extend(knowledge["method"])
+        title, abstract = texts[paper_id]
+        master.append({
+            "local_idx": local_idx, "node_idx": node_idx, "paper_id": paper_id,
+            "title": title, "abstract": abstract, "authors": author.get("authors", []),
+            "knowledge": knowledge,
+            "dtm": {"model": dtm.get("model"), "status": status, "error": dtm.get("error")},
         })
+        statuses[status] += 1
+    meta = {"domains": vocabulary(all_domains), "tasks": vocabulary(all_tasks), "methods": vocabulary(all_methods)}
+    report = {
+        "paper_count": len(master),
+        "sample_order_preserved": [row["node_idx"] for row in master] == sample_nodes,
+        "dtm_status_counts": dict(statuses),
+        "empty_knowledge_papers": sum(not any(row["knowledge"].values()) for row in master),
+        "vocabulary_counts": {key: len(value) for key, value in meta.items()},
+    }
+    write_json(args.master_path, master)
+    write_json(args.meta_path, meta)
+    write_json(args.report_path, report)
+    print(f"마스터: {len(master):,}편 | 표본 순서 보존={report['sample_order_preserved']}")
+    print(f"D/T/M: {dict(statuses)} | 빈 지식: {report['empty_knowledge_papers']}")
+    print(f"사전: D={len(meta['domains']):,}, T={len(meta['tasks']):,}, M={len(meta['methods']):,}")
 
-    # 4. 결과 저장
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        json.dump(final_master_list, f, indent=4, ensure_ascii=False)
-
-    print("\n" + "="*50)
-    print(f"✅ 통합 완료!")
-    print(f" - 매칭 성공(ID 일치): {success_count} / {len(oa_raw)}")
-    print(f" - 결과 파일: {OUTPUT_FILE}")
-    print("="*50)
-
-    # 샘플 출력
-    if final_master_list:
-        sample = final_master_list[0]
-        for item in final_master_list:
-            if item['title'] != "Unknown":
-                sample = item
-                break
-        print(f"\n🧐 [추출 샘플 확인 - ID: {sample['paper_id']}]")
-        print(f"제목: {sample['title']}")
-        print(f"초록 요약: {sample['abstract'][:100]}...")
 
 if __name__ == "__main__":
-    build_final_json_brute_force()
+    main()

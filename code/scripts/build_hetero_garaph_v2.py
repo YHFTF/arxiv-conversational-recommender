@@ -38,6 +38,9 @@ def build_v4_from_v3_logic():
     paper_knowledge = {} 
     for i, item in enumerate(master_data):
         k = item.get('knowledge', {})
+        # Use the frequency-filtered, deterministic vocabulary when it is
+        # available; raw Luna tags remain in the master for audit only.
+        k = k.get('graph', k.get('normalized', k))
         d, t, m = k.get('domain', []), k.get('task', []), k.get('method', [])
         domain_list.extend(d); task_list.extend(t); method_list.extend(m)
         paper_knowledge[i] = {'d': d, 't': t, 'm': m}

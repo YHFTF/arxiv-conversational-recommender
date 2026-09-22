@@ -38,6 +38,10 @@ def build_knowledge_ids(data, meta):
     for i, item in enumerate(master_list):
         if i >= num_papers: break
         k_dict = item.get('knowledge', {})
+        # The raw Luna output is retained for traceability, while ``graph``
+        # contains conservative normalized terms that occur often enough to
+        # learn a useful knowledge embedding.  Fall back for older datasets.
+        k_dict = k_dict.get('graph', k_dict.get('normalized', k_dict))
 
         d_val = k_dict.get('domain', None)
         if isinstance(d_val, list) and len(d_val) > 0: d_val = d_val[0]

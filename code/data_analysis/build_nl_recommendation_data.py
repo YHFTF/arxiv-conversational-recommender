@@ -64,7 +64,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--queries-per-paper", type=int, default=2)
     parser.add_argument("--candidate-count", type=int, default=32)
     parser.add_argument("--concurrency", type=int, default=10)
-    parser.add_argument("--embedding-batch-size", type=int, default=64)
+    parser.add_argument("--embedding-batch-size", type=int, default=512)
+    parser.add_argument("--embedding-checkpoint-interval", type=int, default=4,
+                        help="임베딩 배치 몇 개마다 재개용 JSON 체크포인트를 저장할지")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-abstract-chars", type=int, default=1800)
     parser.add_argument("--overwrite", action="store_true")
@@ -73,7 +75,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def atomic_json(path: Path, value: Any) -> None:
-    temp = path.with_suffix(path.suffix + ".tmp")
+    # A process-specific temporary name prevents a stale/manual resume from
+    # corrupting an otherwise valid checkpoint through a shared ``.tmp`` file.
+    temp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     with temp.open("w", encoding="utf-8") as handle:
         json.dump(value, handle, ensure_ascii=False, indent=2)
     temp.replace(path)
@@ -167,15 +171,17 @@ def load_citations(path: Path, valid_nodes: set[int]) -> dict[int, set[int]]:
 
 def candidate_pool(anchor: dict[str, Any], papers_by_node: dict[int, dict[str, Any]], inverted: dict[str, list[int]],
                    citations: dict[int, set[int]], count: int, seed: int) -> list[int]:
-    """Create a fixed, mixed-difficulty pool without using relevance as an input."""
+    """Create a fixed pool without leaking a D/T/M variant into evaluation.
+
+    Citation neighbours provide hard academic neighbours; the rest are random.
+    D/T/M overlap is intentionally not used because the pool must stay neutral
+    when Raw-DTM and normalized-DTM recommenders are compared.
+    """
     if count < 4:
         raise ValueError("--candidate-count는 4 이상이어야 합니다.")
     rng = random.Random(f"{seed}:{anchor['node_idx']}")
     selected = [anchor["node_idx"]]
     related: set[int] = set(citations.get(anchor["node_idx"], set()))
-    for terms in anchor["knowledge"].values():
-        for term in terms:
-            related.update(inverted.get(term.casefold(), []))
     related.discard(anchor["node_idx"])
     related = {node for node in related if node in papers_by_node}
     related_list = sorted(related)
@@ -274,11 +280,16 @@ async def build_queries(client: AsyncOpenAI, papers: list[dict[str, Any]], args:
             raise ValueError(f"anchor {anchor['node_idx']}의 질의 수가 부족합니다.")
         return rows
 
-    pending = await asyncio.gather(*(one(anchor) for anchor in anchors))
-    for rows in pending:
-        for row in rows:
-            existing[row["query_id"]] = row
+    pending = [anchor for anchor in anchors if not all(
+        f"q-{anchor['node_idx']}-{i}" in existing for i in range(args.queries_per_paper)
+    )]
+    for offset in range(0, len(pending), args.concurrency):
+        batch_rows = await asyncio.gather(*(one(anchor) for anchor in pending[offset:offset + args.concurrency]))
+        for rows in batch_rows:
+            for row in rows:
+                existing[row["query_id"]] = row
         atomic_json(path, [existing[key] for key in sorted(existing)])
+        print(f"[queries] {min(offset + args.concurrency, len(pending))}/{len(pending)}")
     return [existing[key] for key in sorted(existing)]
 
 
@@ -294,14 +305,19 @@ async def build_judgments(client: AsyncOpenAI, queries: list[dict[str, Any]], pa
         anchor = papers_by_node[query_row["anchor_node_idx"]]
         ids = candidate_pool(anchor, papers_by_node, inverted, citations, args.candidate_count, args.seed)
         candidates = [papers_by_node[node] for node in ids]
-        async with semaphore:
-            started = time.perf_counter()
-            data, usage = await call_json(client, args.judge_model, JUDGE_SYSTEM,
-                                          judgement_prompt(query_row["query"], candidates, args.max_abstract_chars))
-        raw_labels = {int(item["node_idx"]): int(item["relevance"]) for item in data.get("labels", [])
-                      if isinstance(item, dict) and str(item.get("node_idx", "")).isdigit() and item.get("relevance") in (0, 1, 2)}
+        started = time.perf_counter()
+        raw_labels: dict[int, int] = {}
+        usage: dict[str, int] = {}
+        for attempt in range(3):
+            async with semaphore:
+                data, usage = await call_json(client, args.judge_model, JUDGE_SYSTEM,
+                                              judgement_prompt(query_row["query"], candidates, args.max_abstract_chars))
+            raw_labels = {int(item["node_idx"]): int(item["relevance"]) for item in data.get("labels", [])
+                          if isinstance(item, dict) and str(item.get("node_idx", "")).isdigit() and item.get("relevance") in (0, 1, 2)}
+            if set(raw_labels) == set(ids):
+                break
         if set(raw_labels) != set(ids):
-            raise ValueError(f"{query_row['query_id']}: 판정 결과가 후보 풀과 일치하지 않습니다.")
+            raise ValueError(f"{query_row['query_id']}: 3회 재시도 후에도 후보 풀 라벨이 완전하지 않습니다.")
         # The anchor was used to generate this query; preserving it as direct relevance
         # prevents a single judge mistake from removing the only guaranteed positive.
         raw_labels[anchor["node_idx"]] = 2
@@ -309,24 +325,28 @@ async def build_judgments(client: AsyncOpenAI, queries: list[dict[str, Any]], pa
                 "candidate_node_indices": ids, "labels": [{"node_idx": node, "relevance": raw_labels[node]} for node in ids],
                 "model": args.judge_model, "latency_seconds": round(time.perf_counter() - started, 3), "usage": usage}
 
-    rows = await asyncio.gather(*(one(query) for query in queries))
-    for row in rows:
-        if row:
-            existing[row["query_id"]] = row
+    pending = [query for query in queries if query["query_id"] not in existing]
+    for offset in range(0, len(pending), args.concurrency):
+        rows = await asyncio.gather(*(one(query) for query in pending[offset:offset + args.concurrency]))
+        for row in rows:
+            if row:
+                existing[row["query_id"]] = row
         atomic_json(path, [existing[key] for key in sorted(existing)])
+        print(f"[judgments] {min(offset + args.concurrency, len(pending))}/{len(pending)}")
 
 
 async def build_embeddings(client: AsyncOpenAI, papers: list[dict[str, Any]], args: argparse.Namespace) -> None:
     checkpoint = args.output_dir / "embedding_rows.json"
     existing = {} if args.overwrite else {int(row["node_idx"]): row for row in read_json(checkpoint, [])}
     pending = [paper for paper in papers if paper["node_idx"] not in existing]
-    for offset in range(0, len(pending), args.embedding_batch_size):
+    for batch_number, offset in enumerate(range(0, len(pending), args.embedding_batch_size), start=1):
         batch = pending[offset:offset + args.embedding_batch_size]
         response = await client.embeddings.create(model=args.embedding_model,
                                                   input=[paper_text(p, args.max_abstract_chars) for p in batch])
         for paper, item in zip(batch, response.data):
             existing[paper["node_idx"]] = {"node_idx": paper["node_idx"], "paper_id": paper["paper_id"], "embedding": item.embedding}
-        atomic_json(checkpoint, [existing[key] for key in sorted(existing)])
+        if batch_number % args.embedding_checkpoint_interval == 0 or offset + len(batch) == len(pending):
+            atomic_json(checkpoint, [existing[key] for key in sorted(existing)])
         print(f"[embeddings] {min(offset + len(batch), len(pending))}/{len(pending)}")
     rows = [existing[paper["node_idx"]] for paper in papers]
     torch.save({"model": args.embedding_model, "node_indices": torch.tensor([r["node_idx"] for r in rows]),
@@ -337,8 +357,8 @@ async def build_embeddings(client: AsyncOpenAI, papers: list[dict[str, Any]], ar
 async def main() -> None:
     args = parse_args()
     args.judge_model = args.judge_model or args.model
-    if args.concurrency < 1 or args.embedding_batch_size < 1:
-        raise ValueError("concurrency와 embedding-batch-size는 1 이상이어야 합니다.")
+    if args.concurrency < 1 or args.embedding_batch_size < 1 or args.embedding_checkpoint_interval < 1:
+        raise ValueError("concurrency, embedding-batch-size, embedding-checkpoint-interval은 1 이상이어야 합니다.")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     papers = load_papers(args.master_path, args.dtm_path)
     papers_by_node = {paper["node_idx"]: paper for paper in papers}
