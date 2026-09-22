@@ -232,55 +232,69 @@ def build_initial_features_v2(train_data):
 # ============================================================
 # 3. 평가
 # ============================================================
-def evaluate_ranking_v2(out, edges, num_papers, k=TOP_K, batch_size=EVAL_BATCH_SIZE):
-    """일반 인용 추천 성능 평가 (Recall@K, NDCG@K)를 수행합니다.
+def _citation_sets(edges, num_papers):
+    """Return ``source -> cited-paper set`` for paper-to-paper edges only."""
+    src, dst = edges[0], edges[1]
+    mask = (src < num_papers) & (dst < num_papers)
+    result = {}
+    for source, target in zip(src[mask].detach().cpu().tolist(), dst[mask].detach().cpu().tolist()):
+        result.setdefault(source, set()).add(target)
+    return result
 
-    오직 인용 에지만이 인풋으로 전달되므로 신뢰성 있는 전체 랭킹 평가를 수행합니다.
+
+def evaluate_ranking_v2(out, edges, num_papers, train_edges=None, k=TOP_K,
+                        batch_size=EVAL_BATCH_SIZE, query_embeddings=None):
+    """Evaluate citation retrieval per source paper, not per individual edge.
+
+    Each source has one ranked candidate list and all of its held-out citations are
+    relevance labels for that list.  Citations already observed in training are
+    removed from the candidate list, preventing both leakage and an inflated
+    Recall@K. ``query_embeddings`` is used by the cold-start evaluation.
     """
-    src, pos_dst = edges[0], edges[1]
-
-    # 평가 대상은 '논문 -> 논문' 연결로만 한정
-    mask = (src < num_papers) & (pos_dst < num_papers)
-    src = src[mask]
-    pos_dst = pos_dst[mask]
-
-    if src.size(0) == 0: 
+    positives_by_source = _citation_sets(edges, num_papers)
+    seen_by_source = _citation_sets(train_edges, num_papers) if train_edges is not None else {}
+    if not positives_by_source:
         return 0.0, 0.0
 
     paper_embeddings = out[:num_papers]
-    total_edges = src.size(0)
+    query_embeddings = paper_embeddings if query_embeddings is None else query_embeddings
+    device = paper_embeddings.device
+    recalls, ndcgs = [], []
+    sources = sorted(positives_by_source)
 
-    all_hits = []
-    all_ndcgs = []
+    for start in range(0, len(sources), batch_size):
+        batch_sources = sources[start:start + batch_size]
+        source_ids = torch.tensor(batch_sources, device=device, dtype=torch.long)
+        scores = torch.matmul(query_embeddings[source_ids], paper_embeddings.t())
 
-    for i in range(0, total_edges, batch_size):
-        end = min(i + batch_size, total_edges)
-        batch_src = src[i:end]
-        batch_pos_dst = pos_dst[i:end]
+        # Exclude only known train citations.  Held-out labels remain eligible.
+        for row, source in enumerate(batch_sources):
+            seen = seen_by_source.get(source, set())
+            if seen:
+                scores[row, torch.tensor(sorted(seen), device=device)] = -torch.inf
 
-        batch_src_embs = out[batch_src]
-        all_scores = torch.matmul(batch_src_embs, paper_embeddings.t())
+        topk = torch.topk(scores, k=min(k, num_papers), dim=1).indices.cpu().tolist()
+        for source, ranking in zip(batch_sources, topk):
+            # A duplicated edge can appear across random splits; it is already
+            # known at train time and therefore cannot be a valid test label.
+            relevant = positives_by_source[source] - seen_by_source.get(source, set())
+            if not relevant:
+                continue
+            hits = [rank for rank, paper_id in enumerate(ranking) if paper_id in relevant]
+            recalls.append(len(hits) / len(relevant))
+            dcg = sum(1.0 / torch.log2(torch.tensor(rank + 2.0)).item() for rank in hits)
+            ideal_count = min(len(relevant), k)
+            idcg = sum(1.0 / torch.log2(torch.tensor(rank + 2.0)).item()
+                       for rank in range(ideal_count))
+            ndcgs.append(dcg / idcg if idcg else 0.0)
 
-        _, indices = torch.sort(all_scores, dim=1, descending=True)
-        rankings = (indices == batch_pos_dst.unsqueeze(1)).nonzero(as_tuple=True)[1]
-
-        hits = (rankings < k).float()
-        ndcg = (1.0 / torch.log2(rankings.float() + 2.0))
-        ndcg[rankings >= k] = 0.0
-
-        all_hits.append(hits)
-        all_ndcgs.append(ndcg)
-
-    if not all_hits:
+    if not recalls:
         return 0.0, 0.0
-
-    final_hits = torch.cat(all_hits).mean().item()
-    final_ndcg = torch.cat(all_ndcgs).mean().item()
-
-    return final_hits, final_ndcg
+    return sum(recalls) / len(recalls), sum(ndcgs) / len(ndcgs)
 
 
-def evaluate_cold_start_v2(model, test_out, cold_edges, cold_mask, num_papers, k=TOP_K, batch_size=EVAL_BATCH_SIZE):
+def evaluate_cold_start_v2(model, test_out, cold_edges, cold_mask, num_papers,
+                           train_edges=None, k=TOP_K, batch_size=EVAL_BATCH_SIZE):
     """[핵심 개선] 진정한 신규 노드(Cold-Start) 상황을 평가합니다.
 
     학습 시 물리적으로 완벽 차단된 Cold-Start 논문 노드를 쿼리(`src`)로 삼고,
@@ -298,57 +312,60 @@ def evaluate_cold_start_v2(model, test_out, cold_edges, cold_mask, num_papers, k
     src = src[cold_query_mask]
     pos_dst = pos_dst[cold_query_mask]
 
-    if src.size(0) == 0: 
+    if src.size(0) == 0:
         return 0.0, 0.0
-
-    # 추천 대상 후보군은 일반적인 학습된 임베딩 사용 (단, Cold 논문은 배제할 수 있으나 현실성 유지를 위해 그대로 둠)
-    paper_embeddings = test_out[:num_papers]
-    total_edges = src.size(0)
-
-    all_hits = []
-    all_ndcgs = []
-
-    for i in range(0, total_edges, batch_size):
-        end = min(i + batch_size, total_edges)
-        batch_src = src[i:end]
-        batch_pos_dst = pos_dst[i:end]
-
-        # 쿼리가 진짜 신규 노드이므로 텍스트 및 지식 메타로만 임베딩 생성
-        if hasattr(model, 'get_cold_start_embeddings'):
-            batch_src_embs = model.get_cold_start_embeddings(batch_src)
-        else:
-            # Cold-Start 임베딩 생성을 지원하지 않는 베이스라인 모델(BPRMF 등)은 Zero 벡터로 처리
-            batch_src_embs = torch.zeros((batch_src.size(0), paper_embeddings.size(1)), device=paper_embeddings.device)
-
-        all_scores = torch.matmul(batch_src_embs, paper_embeddings.t())
-
-        _, indices = torch.sort(all_scores, dim=1, descending=True)
-        rankings = (indices == batch_pos_dst.unsqueeze(1)).nonzero(as_tuple=True)[1]
-
-        hits = (rankings < k).float()
-        ndcg = (1.0 / torch.log2(rankings.float() + 2.0))
-        ndcg[rankings >= k] = 0.0
-
-        all_hits.append(hits)
-        all_ndcgs.append(ndcg)
-
-    if not all_hits:
-        return 0.0, 0.0
-
-    final_hits = torch.cat(all_hits).mean().item()
-    final_ndcg = torch.cat(all_ndcgs).mean().item()
-
-    return final_hits, final_ndcg
+    # Build a full query matrix so the common source-grouped evaluator can be
+    # reused.  Cold sources receive text/knowledge-only embeddings.
+    query_embeddings = test_out[:num_papers].clone()
+    cold_sources = torch.unique(src)
+    if hasattr(model, 'get_cold_start_embeddings'):
+        query_embeddings[cold_sources] = model.get_cold_start_embeddings(cold_sources)
+    else:
+        query_embeddings[cold_sources] = 0
+    return evaluate_ranking_v2(test_out, torch.stack([src, pos_dst]), num_papers,
+                               train_edges=train_edges, k=k, batch_size=batch_size,
+                               query_embeddings=query_embeddings)
 
 
 # ============================================================
 # 4. 통합 학습 루프
 # ============================================================
+def sample_paper_negatives(pos_src, train_pp_edges, num_papers):
+    """Sample one non-cited Paper per positive citation.
+
+    The lookup uses encoded paper-pair IDs, so negatives can never be Author or
+    Topic nodes and can never be an observed positive citation for that source.
+    """
+    device = pos_src.device
+    edge_hashes = torch.unique(
+        train_pp_edges[0].to(device=device, dtype=torch.long) * num_papers
+        + train_pp_edges[1].to(device=device, dtype=torch.long)
+    ).sort().values
+    negatives = torch.randint(num_papers, (pos_src.numel(),), device=device)
+
+    # Sparse citation graphs converge quickly.  Keep resampling only invalid
+    # positions, preserving a vectorized GPU path.
+    invalid = torch.ones_like(negatives, dtype=torch.bool)
+    while invalid.any():
+        candidate_hashes = pos_src[invalid].long() * num_papers + negatives[invalid].long()
+        locations = torch.searchsorted(edge_hashes, candidate_hashes)
+        is_positive = torch.zeros_like(locations, dtype=torch.bool)
+        in_bounds = locations < edge_hashes.numel()
+        is_positive[in_bounds] = edge_hashes[locations[in_bounds]] == candidate_hashes[in_bounds]
+        invalid_indices = invalid.nonzero(as_tuple=True)[0]
+        invalid.fill_(False)
+        invalid[invalid_indices[is_positive]] = True
+        if invalid.any():
+            negatives[invalid] = torch.randint(num_papers, (invalid.sum().item(),), device=device)
+    return negatives
+
+
 def train_and_evaluate_v2(model, train_data, val_edges, test_edges, cold_edges, cold_mask,
                           num_papers, model_name="Model", save_path=None, force_retrain=False):
     """통일된 BPR 학습 + 평가를 수행합니다 (v2 Zero-Leakage)."""
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     best_val_ndcg = -float('inf')
+    checkpoint_written = False
 
     # 학습용 통합 그래프 추출
     train_unified_edges = build_unified_graph_v2(train_data)
@@ -356,57 +373,66 @@ def train_and_evaluate_v2(model, train_data, val_edges, test_edges, cold_edges, 
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-    # 이미 모델이 있고 재학습을 강제하지 않는 경우 학습 건너뜀
-    if not force_retrain and save_path and os.path.exists(save_path):
-        print(f"  [LOAD] '{os.path.basename(save_path)}' 기존 가중치를 로드하여 평가를 진행합니다.")
-    else:
-        # 학습에 쓰일 인용 에지 추출
-        train_pp_edges = train_data['paper', 'cites', 'paper'].edge_index
+    # P0: never evaluate a stale train_v4/checkpoint result as a new benchmark.
+    # A checkpoint is only a transient best epoch from *this* benchmark run.
+    if save_path and os.path.exists(save_path):
+        print(f"  [OVERWRITE] 기존 체크포인트를 재사용하지 않고 새 실험으로 덮어씁니다: {os.path.basename(save_path)}")
 
-        for epoch in range(1, NUM_EPOCHS + 1):
-            model.train()
-            optimizer.zero_grad()
+    train_pp_edges = train_data['paper', 'cites', 'paper'].edge_index
+    # Do not turn a held-out real citation into a false negative.  These edges
+    # are used only for negative filtering, never for message passing, scoring,
+    # or model selection.
+    all_positive_citations = torch.cat(
+        [train_pp_edges, val_edges, test_edges, cold_edges], dim=1)
+    for epoch in range(1, NUM_EPOCHS + 1):
+        model.train()
+        optimizer.zero_grad()
 
-            # GNN 모델의 경우 학습 그래프로 완전히 격리된 train_unified_edges 전달
-            out = model(train_unified_edges)
+        # GNN 모델의 경우 학습 그래프로 완전히 격리된 train_unified_edges 전달
+        out = model(train_unified_edges)
+        pos_src, pos_dst = train_pp_edges[0], train_pp_edges[1]
+        neg_dst = sample_paper_negatives(pos_src, all_positive_citations, num_papers)
 
-            pos_src, pos_dst = train_pp_edges[0], train_pp_edges[1]
-            neg_dst = torch.randint(0, model.total_nodes, (pos_src.size(0),), device=DEVICE)
+        pos_scores = (out[pos_src] * out[pos_dst]).sum(dim=-1)
+        neg_scores = (out[pos_src] * out[neg_dst]).sum(dim=-1)
+        bpr_loss = -torch.log(torch.sigmoid(pos_scores - neg_scores) + 1e-15).mean()
 
-            pos_scores = (out[pos_src] * out[pos_dst]).sum(dim=-1)
-            neg_scores = (out[pos_src] * out[neg_dst]).sum(dim=-1)
-            bpr_loss = -torch.log(torch.sigmoid(pos_scores - neg_scores) + 1e-15).mean()
+        bpr_loss.backward()
+        optimizer.step()
 
-            bpr_loss.backward()
-            optimizer.step()
+        model.eval()
+        with torch.no_grad():
+            val_out = model(train_unified_edges)
+            val_recall, val_ndcg = evaluate_ranking_v2(
+                val_out, val_edges, num_papers, train_edges=train_pp_edges)
 
-            model.eval()
-            with torch.no_grad():
-                val_out = model(train_unified_edges)
-                val_recall, val_ndcg = evaluate_ranking_v2(val_out, val_edges, num_papers)
+            if val_ndcg > best_val_ndcg:
+                best_val_ndcg = val_ndcg
+                if save_path:
+                    torch.save(model.state_dict(), save_path)
+                    checkpoint_written = True
 
-                if val_ndcg > best_val_ndcg:
-                    best_val_ndcg = val_ndcg
-                    if save_path:
-                        torch.save(model.state_dict(), save_path)
-
-            if epoch % EVAL_INTERVAL == 0 or epoch == 1:
-                print(f"  [{model_name}] Epoch {epoch:3d} | BPR Loss: {bpr_loss.item():.4f} "
-                      f"| Val R@{TOP_K}: {val_recall:.4f} | Val N@{TOP_K}: {val_ndcg:.4f}")
+        if epoch % EVAL_INTERVAL == 0 or epoch == 1:
+            print(f"  [{model_name}] Epoch {epoch:3d} | BPR Loss: {bpr_loss.item():.4f} "
+                  f"| Val R@{TOP_K}: {val_recall:.4f} | Val N@{TOP_K}: {val_ndcg:.4f}")
 
     # Best 모델 복원 후 최종 테스트 (General + True Cold-Start)
-    if save_path and os.path.exists(save_path):
+    if save_path and checkpoint_written:
         model.load_state_dict(torch.load(save_path, weights_only=True))
+    elif save_path:
+        print("  [WARN] 이번 실행에서 validation checkpoint가 생성되지 않아 마지막 epoch를 평가합니다.")
 
     model.eval()
     with torch.no_grad():
         test_out = model(train_unified_edges)
         
         # 1. 일반 성능 (Transductive - Warm)
-        test_recall, test_ndcg = evaluate_ranking_v2(test_out, test_edges, num_papers)
+        test_recall, test_ndcg = evaluate_ranking_v2(
+            test_out, test_edges, num_papers, train_edges=train_pp_edges)
         
         # 2. 콜드 스타트 성능 (True Inductive Simulation)
-        cs_recall, cs_ndcg = evaluate_cold_start_v2(model, test_out, cold_edges, cold_mask, num_papers)
+        cs_recall, cs_ndcg = evaluate_cold_start_v2(
+            model, test_out, cold_edges, cold_mask, num_papers, train_edges=train_pp_edges)
         
         print(f"  [OK] [{model_name}] Test R@{TOP_K}: {test_recall:.4f} | N@{TOP_K}: {test_ndcg:.4f}")
         print(f"  [CS] [{model_name}] Cold-Start R@{TOP_K}: {cs_recall:.4f} | N@{TOP_K}: {cs_ndcg:.4f}")

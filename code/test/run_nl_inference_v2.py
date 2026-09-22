@@ -88,10 +88,13 @@ def get_openai_text_embedding_128d(text, api_key):
         return None
 
 
-def find_best_semantic_match(term, vocab_dict, vocab_embs, sorted_keys, api_key, threshold=0.35):
+def find_best_semantic_match(term, vocab_dict, vocab_embs, sorted_keys, api_key,
+                             threshold=0.35, ambiguity_margin=0.05):
     """
     1. 대소문자 구분 없이 완벽 일치하는 단어가 있다면 즉시 ID 반환 (API 호출 최소화).
     2. 완벽 일치가 없다면 extracted_term의 임베딩을 생성하여, 전체 vocab 임베딩과의 코사인 유사도를 바탕으로 매핑.
+    3. 최고 유사도가 threshold 미만이거나 Top-1/Top-2 차이가 너무 작으면
+       강제 매핑하지 않고 Unknown(ID=0)으로 반환.
     """
     if not term:
         return 0, "N/A", 0.0
@@ -113,12 +116,18 @@ def find_best_semantic_match(term, vocab_dict, vocab_embs, sorted_keys, api_key,
     
     # 코사인 유사도 연산
     sims = torch.cosine_similarity(term_emb.unsqueeze(0), vocab_embs_dev)
-    max_sim, best_idx = torch.max(sims, dim=0)
-    max_sim = max_sim.item()
-    best_idx = best_idx.item()
+    top_count = min(2, sims.numel())
+    top_sims, top_indices = torch.topk(sims, k=top_count)
+    max_sim = top_sims[0].item()
+    best_idx = top_indices[0].item()
+
+    if max_sim < threshold:
+        return 0, f"Unknown (below threshold: {max_sim:.4f})", max_sim
+    if top_count == 2 and (max_sim - top_sims[1].item()) < ambiguity_margin:
+        return 0, f"Unknown (ambiguous; margin: {max_sim - top_sims[1].item():.4f})", max_sim
     
     matched_term = sorted_keys[best_idx]
-    matched_id = best_idx + 1 # ID는 1부터 시작하므로
+    matched_id = vocab_dict[matched_term]
     return matched_id, matched_term, max_sim
 
 
@@ -126,6 +135,8 @@ def main():
     parser = argparse.ArgumentParser(description="End-to-End [V5 순수 신경망형] 제로샷 시맨틱 벡터 매치 모델")
     parser.add_argument('--top_k', type=int, default=5, help="추천받을 논문 개수")
     parser.add_argument('--threshold', type=float, default=0.35, help="시맨틱 매칭 유사도 임계값")
+    parser.add_argument('--ambiguity-margin', type=float, default=0.05,
+                        help="Top-1/Top-2 유사도 차이가 이 값보다 작으면 Unknown 처리")
     args = parser.parse_args()
 
     api_key = os.getenv("OPENAI_API_KEY")
@@ -209,9 +220,9 @@ def main():
         t_term = specs.get('task')
         m_term = specs.get('method')
         
-        d_id, d_matched, d_sim = find_best_semantic_match(d_term, meta['domains'], vocab_embeddings['domains'], domain_keys, api_key, args.threshold)
-        t_id, t_matched, t_sim = find_best_semantic_match(t_term, meta['tasks'], vocab_embeddings['tasks'], task_keys, api_key, args.threshold)
-        m_id, m_matched, m_sim = find_best_semantic_match(m_term, meta['methods'], vocab_embeddings['methods'], method_keys, api_key, args.threshold)
+        d_id, d_matched, d_sim = find_best_semantic_match(d_term, meta['domains'], vocab_embeddings['domains'], domain_keys, api_key, args.threshold, args.ambiguity_margin)
+        t_id, t_matched, t_sim = find_best_semantic_match(t_term, meta['tasks'], vocab_embeddings['tasks'], task_keys, api_key, args.threshold, args.ambiguity_margin)
+        m_id, m_matched, m_sim = find_best_semantic_match(m_term, meta['methods'], vocab_embeddings['methods'], method_keys, api_key, args.threshold, args.ambiguity_margin)
         
         print(f"      Domain : {d_term} -> Match: '{d_matched}' (Sim: {d_sim:.4f}) | ID: {d_id}")
         print(f"      Task   : {t_term} -> Match: '{t_matched}' (Sim: {t_sim:.4f}) | ID: {t_id}")
