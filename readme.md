@@ -88,15 +88,7 @@ Python, PyTorch, CUDA용 패키지와 프로젝트 의존성은 배포된 Docker
 
 ## 주요 실행 방법
 
-학습과 벤치마크는 대시보드에서 실행할 수 있습니다. CLI가 필요할 때는 프로젝트 루트에서 다음과 같이 실행 중인 `dashboard` 컨테이너 안의 Python을 사용합니다.
-
-### V4 지식 그래프 모델 학습
-
-```bash
-docker compose -f docker-compose.dashboard.yml exec dashboard python code/model/train_v4_knowledge_bpr.py
-```
-
-학습된 가중치는 `output/lightgcn_v4_knowledge_bpr.pt`에 저장됩니다. 이 스크립트는 100 epoch 동안 학습하며 CUDA가 없으면 CPU를 사용합니다.
+벤치마크는 대시보드에서 실행할 수 있습니다. CLI가 필요할 때는 프로젝트 루트에서 다음과 같이 실행 중인 `dashboard` 컨테이너 안의 Python을 사용합니다.
 
 ### 통합 벤치마크 v2
 
@@ -121,42 +113,14 @@ docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/r
 
 결과 JSON과 모델 가중치는 `output/benchmark/`에 저장됩니다.
 
-### 자연어 논문 추천 v2
-
-자연어 질의에서 Domain·Task·Method를 추출하고, 메타데이터 사전과 시맨틱 매칭한 뒤 V4 지식 임베딩 공간에서 논문을 추천합니다.
-
-```bash
-docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/run_nl_inference_v2.py --top_k 5 --threshold 0.35
-```
-
-필요 조건:
-
-- `OPENAI_API_KEY`
-- `output/knowledge_meta_embeddings.pt`
-- 벤치마크 v2가 만든 `output/benchmark/benchmark_lightgcn__knowledge_(ours)_v2.pt`
-
-메타 임베딩 파일이 없다면 아래 명령으로 생성할 수 있습니다. OpenAI Embeddings API 비용이 발생합니다.
-
-```bash
-docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/word_embedding.py
-```
-
-### 제목 기반 추천
-
-```bash
-docker compose -f docker-compose.dashboard.yml exec dashboard python code/test/run_inference.py --query "graph neural network" --top_k 5
-```
-
-이 명령은 `run_benchmark.py`가 만든 해당 모델 가중치를 사용합니다.
-
 ## 대시보드 기능
 
 - 현재 브랜치, 최근 커밋, 변경 파일 확인
 - GitHub 이슈 조회
 - 팀 메모 작성 및 보관
 - 프로젝트 문서 조회
-- V4 학습과 통합 벤치마크 작업 실행 및 로그 확인
-- 학습 6개 버전과 벤치마크 2개 버전 선택 실행
+- 통합 벤치마크 작업 실행 및 로그 확인
+- Zero-Leakage 벤치마크 실행
 - 새로 추가된 `code/**/*.py` 자동 탐색 및 컨테이너 실행
 - 브랜치별 커밋 확인, 작업 브랜치 전환 및 Pull
 - 파일시스템 기반 외부 Output 저장소 가져오기/내보내기

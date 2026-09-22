@@ -47,28 +47,11 @@ ARTIFACT_STORAGE = os.getenv("ARTIFACT_STORAGE_PATH", "").strip()
 
 
 TASKS = {
-    "train": {
-        "label": "모델 학습",
-        "description": "선택한 LightGCN 버전을 학습합니다.",
-        "default": "v4_knowledge_bpr",
-        "variants": {
-            "v1": ("V1 LightGCN", "code/model/train.py"),
-            "v1_split": ("V1 Split", "code/model/train_split.py"),
-            "v2": ("V2 LightGCN", "code/model/train_v2.py"),
-            "v2_split": ("V2 Split", "code/model/train_v2_split.py"),
-            "v3_bpr": ("V3 BPR", "code/model/train_v3_bpr.py"),
-            "v4_knowledge_bpr": (
-                "V4 Knowledge BPR",
-                "code/model/train_v4_knowledge_bpr.py",
-            ),
-        },
-    },
     "benchmark": {
         "label": "통합 벤치마크",
         "description": "선택한 평가 방식으로 모델 성능을 비교합니다.",
         "default": "v2_zero_leakage",
         "variants": {
-            "v1": ("V1 통합 벤치마크", "code/test/run_benchmark.py"),
             "v2_zero_leakage": (
                 "V2 Zero-Leakage",
                 "code/test/run_benchmark_v2.py",
