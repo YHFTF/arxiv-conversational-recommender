@@ -224,26 +224,29 @@ Candidates:
 
 
 async def call_json(client: AsyncOpenAI, model: str, system: str, user: str) -> tuple[dict[str, Any], dict[str, int]]:
+    # This offline batch has a different query/candidate payload on every call.
+    # Explicit mode with no breakpoints disables implicit prompt-cache writes,
+    # which would otherwise add cache-write charges without useful cache reads.
     request: dict[str, Any] = {
         "model": model,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "response_format": {"type": "json_object"},
-        "max_completion_tokens": 900,
+        "input": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "text": {"format": {"type": "json_object"}},
+        "max_output_tokens": 900,
+        "prompt_cache_options": {"mode": "explicit"},
     }
     if model.startswith("gpt-5"):
-        request["reasoning_effort"] = "none"
+        request["reasoning"] = {"effort": "none"}
     else:
         request["temperature"] = 0
-        request["max_tokens"] = 900
     last_error: Exception | None = None
     for attempt in range(4):
         try:
-            response = await client.chat.completions.create(**request)
-            raw = response.choices[0].message.content or "{}"
+            response = await client.responses.create(**request)
+            raw = response.output_text or "{}"
             usage = response.usage
             return json.loads(raw), {
-                "input_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
-                "output_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+                "input_tokens": getattr(usage, "input_tokens", 0) if usage else 0,
+                "output_tokens": getattr(usage, "output_tokens", 0) if usage else 0,
             }
         except Exception as exc:
             last_error = exc

@@ -41,6 +41,26 @@ output/
 
 벤치마크를 실행하면 모델 가중치는 `output/benchmark/`에 생성됩니다.
 
+## 자연어 논문 검색 프로토타입
+
+`output/nl_recommendation_data/`의 텍스트 임베딩을 사용해 자연어 질의에서 논문을 찾는다. 기본 순위는 cosine similarity다. D/T/M 보조 점수와 인용 이웃 다양성 패널티는 현재 작은 평가셋에서 text-only보다 좋지 않아 기본값을 `0`으로 두고 실험 옵션으로만 제공한다.
+
+```bash
+# 대화형 자연어 추천: 실행 후 질문을 입력한다. :quit으로 종료한다.
+venv/bin/python code/test/run_nl_recommendation.py
+
+# AI relevance 라벨이 있는 고정 후보 32개 내에서 test 지표 계산
+venv/bin/python code/test/run_nl_recommendation.py --evaluate --split test --top-k 20
+```
+
+```bash
+# 보조 재정렬을 비교할 때만 명시적으로 켠다.
+venv/bin/python code/test/run_nl_recommendation.py --evaluate --split test --top-k 20 \
+  --dtm-weight 0.10 --graph-diversity-weight 0.05
+```
+
+평가 질의 임베딩은 첫 실행 때 `output/nl_recommendation_data/query_embeddings.pt`에 캐시된다. 이 평가는 작은 synthetic 세트의 초기 비교용이며, 최종 성능 주장을 위한 벤치마크는 아니다.
+
 ### 환경 변수
 
 Docker Compose 실행 설정은 프로젝트 루트의 `.env`에서 변경할 수 있습니다.
