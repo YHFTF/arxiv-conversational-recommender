@@ -14,7 +14,7 @@ const $$ = (selector, root = document) => [
 // ============================================================
 
 const COLAB_URL =
-  'https://colab.research.google.com/github/YHFTF/arxiv-conversational-recommender/blob/main/colab/GPU_Workbench.ipynb';
+  'https://colab.research.google.com/github/YHFTF/arxiv-conversational-recommender/blob/main/notebooks/GPU_Workbench.ipynb';
 
 const PAGE_NAMES = {
   home: '프로젝트 컨트롤 센터',
@@ -22,7 +22,7 @@ const PAGE_NAMES = {
   scripts: '라이브 스크립트 실행',
   learn: '모델 학습',
   benchmark: '성능 벤치마크',
-  production: '실사용',
+  production: '대화형 논문 추천',
 };
 
 const JOB_STATUS_TEXT = {

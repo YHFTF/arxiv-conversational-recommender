@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -54,7 +55,7 @@ TASKS = {
         "variants": {
             "v2_zero_leakage": (
                 "V2 Zero-Leakage",
-                "code/test/run_benchmark_v2.py",
+                "code/graph_benchmark/run_benchmark.py",
             ),
         },
     },
@@ -117,7 +118,7 @@ def gpu_diagnostics() -> tuple[bool, list[str]]:
 
     code, stdout, stderr = run(
         [
-            "python",
+            sys.executable,
             "-c",
             (
                 "import sys, torch; "
@@ -759,8 +760,9 @@ def docs() -> list[dict]:
     paths = [
         ROOT / "readme.md",
         *sorted(
-            (ROOT / "docs").glob("*.md")
+            (ROOT / "docs").rglob("*.md")
         ),
+        ROOT / "benchmarks" / "README.md",
     ]
 
     return [
@@ -786,13 +788,18 @@ def tree() -> list[dict]:
             "LLM 지식 추출",
         ),
         (
-            "code/model",
+            "code/models",
             "모델 학습",
         ),
         (
-            "code/test",
-            "평가와 추론",
+            "code/graph_benchmark",
+            "그래프 학습과 평가",
         ),
+        ("code/retrieval", "자연어 검색"),
+        ("code/embeddings", "로컬 임베딩"),
+        ("benchmarks", "검색 비교 벤치마크"),
+        ("tests", "자동 테스트"),
+        ("notebooks", "Colab 노트북"),
         (
             "subdataset",
             "전처리 데이터",
@@ -1345,7 +1352,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self.start_job(
             "script",
             f"스크립트: {relative_path}",
-            ["python", "-u", relative_path],
+            [sys.executable, "-u", relative_path],
         )
 
     def handle_storage_sync(self, data: dict) -> None:
@@ -1442,7 +1449,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self.start_job(
             task_key,
             variant[0],
-            ["python", "-u", variant[1]],
+            [sys.executable, "-u", variant[1]],
         )
 
 

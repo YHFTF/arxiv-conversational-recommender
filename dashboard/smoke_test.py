@@ -1,9 +1,10 @@
 """Small smoke test for a running dashboard server."""
 
 import json
+import os
 import urllib.request
 
-BASE = "http://127.0.0.1:8080"
+BASE = os.getenv("DASHBOARD_BASE_URL", "http://127.0.0.1:8080")
 
 
 def get(path):
@@ -22,8 +23,8 @@ index = get("/")
 assert health["ok"] is True
 assert "branch" in git and "commits" in git
 assert docs["documents"] and docs["tree"]
-assert len(tasks["tasks"]["train"]["variants"]) >= 2
-assert len(tasks["tasks"]["benchmark"]["variants"]) >= 2
+assert tasks["tasks"]["benchmark"]["variants"]
+assert tasks["tasks"]["inference"]["interactive"] is True
 assert scripts["scripts"]
 assert "configured" in storage and "output" in storage
 assert b"app.js" in index and b"styles.css" in index

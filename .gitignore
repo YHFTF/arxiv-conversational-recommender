@@ -5,6 +5,7 @@ output/
 subdataset/
 venv/
 topic_prediction_results.json
-data.zip__pycache__/
+data.zip
 .dashboard-data/ 
 dashboard/__pycache__/
+__pycache__/

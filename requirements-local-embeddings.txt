@@ -1,0 +1,4 @@
+# Install into the existing CUDA virtual environment; preserve its torch wheel.
+transformers==4.57.6
+accelerate==1.15.0
+bitsandbytes==0.50.2
