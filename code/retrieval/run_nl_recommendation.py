@@ -494,10 +494,10 @@ def load_or_embed_intent_terms(client: OpenAI, model: str, intents: dict[str, di
     return {term: cached[term] for term in required_terms}
 
 
-def ndcg_at_k(labels: list[int], k: int) -> float:
+def ndcg_at_k(labels: list[int], k: int, ideal_labels: list[int] | None = None) -> float:
     gains = [((2 ** label) - 1) / torch.log2(torch.tensor(rank + 2.0)).item()
              for rank, label in enumerate(labels[:k])]
-    ideal = sorted(labels, reverse=True)
+    ideal = sorted(labels if ideal_labels is None else ideal_labels, reverse=True)
     ideal_gains = [((2 ** label) - 1) / torch.log2(torch.tensor(rank + 2.0)).item()
                    for rank, label in enumerate(ideal[:k])]
     return sum(gains) / sum(ideal_gains) if sum(ideal_gains) else 0.0
@@ -534,6 +534,8 @@ def evaluate(args: argparse.Namespace, client: OpenAI, papers: list[dict[str, An
                             f"pending={len(pending_intents)}, workers={args.intent_workers}")
         failures: list[tuple[str, Exception]] = []
         if pending_intents:
+            if client is None:
+                raise RuntimeError("Missing cached intent plans require OPENAI_API_KEY; existing complete caches can be evaluated offline.")
             with ThreadPoolExecutor(max_workers=args.intent_workers) as executor:
                 futures = {executor.submit(analyse_query_intent, client, args.intent_model, row["query"]): row
                            for row in pending_intents}
@@ -602,7 +604,7 @@ def evaluate(args: argparse.Namespace, client: OpenAI, papers: list[dict[str, An
             strong = sum(label == 2 for label in all_labels)
             metrics[k]["recall"].append(sum(label >= 1 for label in ranked_labels[:cutoff]) / relevant if relevant else 0.0)
             metrics[k]["strong_recall"].append(sum(label == 2 for label in ranked_labels[:cutoff]) / strong if strong else 0.0)
-            metrics[k]["ndcg"].append(ndcg_at_k(ranked_labels, cutoff))
+            metrics[k]["ndcg"].append(ndcg_at_k(ranked_labels, cutoff, all_labels))
         if query_number == 1 or query_number % 10 == 0 or query_number == len(queries):
             progress("ranking", f"{query_number}/{len(queries)}")
     return {"queries": len(queries), "split": args.split, "candidate_pool": 32,
@@ -717,7 +719,7 @@ def main() -> None:
     authors = (load_authors(args.author_edge_path, args.author_mapping_path, {paper["node_idx"] for paper in papers})
                if args.author_top_k else {})
     load_dotenv(ROOT / ".env")
-    if not os.getenv("OPENAI_API_KEY") and (embedding_model != LOCAL_MODEL or args.intent_analysis):
+    if not os.getenv("OPENAI_API_KEY") and (embedding_model != LOCAL_MODEL or (args.intent_analysis and not args.evaluate)):
         raise SystemExit("OPENAI_API_KEY가 필요합니다.")
     client = OpenAI() if os.getenv("OPENAI_API_KEY") else None
     if args.evaluate:

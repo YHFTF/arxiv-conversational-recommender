@@ -31,7 +31,8 @@ def build_v4_from_v3_logic():
     }
     
     reordered_features = torch.stack([sample_pt['features'][source_idx_map[rid]] for rid in target_node_indices])
-    paper_y = sample_pt['labels'].squeeze()
+    # Labels must follow exactly the same node-ID reordering as paper features.
+    paper_y = torch.stack([sample_pt['labels'][source_idx_map[rid]] for rid in target_node_indices]).reshape(-1)
 
     # --- 2. 지식 데이터 및 단어장(Vocab) 생성 ---
     domain_list, task_list, method_list = [], [], []
@@ -77,7 +78,7 @@ def build_v4_from_v3_logic():
     print("✍️ [3/4] 6차원 지식 속성 [D1, D2, T1, T2, M1, M2] 생성 중...")
     paper_indices, topic_indices, edge_attr_6 = [], [], []
 
-    for i in range(16000):
+    for i in range(len(master_data)):
         info = paper_knowledge.get(i, {'d': [], 't': [], 'm': []})
         def get_top_two(items, mapping):
             return [mapping[items[j]] if j < len(items) and items[j] in mapping else 0 for j in range(2)]
@@ -91,7 +92,7 @@ def build_v4_from_v3_logic():
 
     # 최종 노드 설정
     data['paper'].x = reordered_features
-    data['paper'].num_nodes = 16000
+    data['paper'].num_nodes = len(master_data)
     data['author'].num_nodes = int(data['author', 'writes', 'paper'].edge_index[0].max().item() + 1)
     data['topic'].num_nodes = 40
 

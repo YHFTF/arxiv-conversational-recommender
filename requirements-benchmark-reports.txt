@@ -1,0 +1,4 @@
+# Optional dependencies for benchmark metrics and PNG/PDF/SVG reports.
+# Install after the project's CUDA environment; this file does not install torch.
+scipy>=1.11,<2
+matplotlib>=3.8,<4
