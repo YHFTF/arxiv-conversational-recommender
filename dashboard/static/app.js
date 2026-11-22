@@ -22,7 +22,7 @@ const PAGE_NAMES = {
   scripts: '라이브 스크립트 실행',
   learn: '모델 학습',
   benchmark: '성능 벤치마크',
-  production: '대화형 논문 추천',
+  production: '논문 추천',
 };
 
 const JOB_STATUS_TEXT = {

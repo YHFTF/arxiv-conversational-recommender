@@ -1,4 +1,33 @@
 #production { max-width: 1500px; padding-top: 26px; }
+.live-rec-search {padding:22px;background:#151d28;border:1px solid var(--line);border-radius:14px;}
+.live-rec-search label {display:block;margin-bottom:12px;font-weight:600;}
+.live-rec-search textarea {box-sizing:border-box;width:100%;resize:vertical;background:#0d141e;color:#e6edf5;border:1px solid #3b485a;border-radius:9px;padding:14px;font:inherit;line-height:1.6;}
+.live-rec-search>div {display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;}
+.live-rec-search span,.live-rec-muted {color:var(--muted);font-size:12px;line-height:1.6;}
+.live-rec-search button {background:var(--lime);color:#14200d;border:0;border-radius:8px;padding:12px 20px;font:inherit;font-weight:700;cursor:pointer;}
+.live-rec-search button:disabled {opacity:.6;cursor:wait;}
+.live-rec-examples {display:flex;flex-wrap:wrap;gap:8px;margin:14px 0;}
+.live-rec-examples button {font:inherit;font-size:12px;padding:8px 12px;border-radius:20px;border:1px solid var(--line);background:#151d28;color:#c7d2df;cursor:pointer;}
+.live-rec-plan {padding:16px;background:#151d28;border:1px solid var(--line);border-radius:10px;margin-bottom:18px;overflow-wrap:anywhere;}
+.live-rec-plan p {line-height:1.6;}
+#live-rec-status {line-height:1.7;min-height:28px;}
+.live-rec-error,.live-rec-unknown {color:#f2c27d;}
+.live-rec-confirmed {color:#b8cf91;}
+#live-rec-results {align-items:start;}
+#live-rec-results details {margin-top:14px;font-size:12px;line-height:1.8;overflow-wrap:anywhere;}
+#live-rec-results summary {cursor:pointer;color:var(--cyan);}
+.live-rec-link {display:inline-block;margin-top:20px;color:var(--cyan);font-size:12px;}
+#live-rec-paper-heading[hidden] {display:none;}
+.live-rec-jump {padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:#151d28;color:var(--cyan);font:inherit;font-size:12px;cursor:pointer;}
+#live-rec-authors {margin-top:26px;scroll-margin-top:16px;}
+#live-rec-authors .live-rec-author {overflow-wrap:anywhere;}
+#live-rec-authors .live-rec-author h4 {font-size:15px;}
+#live-rec-authors .live-rec-author p {font-size:12px;}
+.live-rec-author ul {margin:12px 0 0;padding-left:18px;font-size:12px;line-height:1.6;}
+.live-rec-author li + li {margin-top:5px;}
+.live-rec-author a {color:var(--cyan);}
+.live-rec-author .live-rec-link {margin-top:10px;}
+@media(max-width:800px){.live-rec-search>div{align-items:stretch;flex-direction:column;}#live-rec-results{grid-template-columns:1fr;}}
 .rec-heading { display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:24px; }
 .rec-heading label { color:var(--cyan); letter-spacing:2.5px; font-size:10px; }
 .rec-heading h2 { font-size:28px; letter-spacing:-1px; margin:6px 0; }

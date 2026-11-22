@@ -74,6 +74,13 @@ TASKS = {
 jobs: dict[str, dict] = {}
 job_processes: dict[str, subprocess.Popen] = {}
 jobs_lock = threading.Lock()
+if __package__:
+    from .cpu_recommendation import RecommendationService
+else:
+    # Support direct script execution and importlib-based entry-point checks.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from cpu_recommendation import RecommendationService
+recommendations = RecommendationService(ROOT, OUTPUT)
 
 
 # ---------------------------------------------------------------------
@@ -993,6 +1000,10 @@ class Handler(SimpleHTTPRequestHandler):
                 }
             )
 
+        if path.startswith('/api/cpu-recommend/'):
+            job=recommendations.get(path.rsplit('/',1)[-1])
+            return self.send_json(job if job else {'error':'검색 요청을 찾을 수 없습니다.'},200 if job else 404)
+
         if path == "/api/git":
             return self.send_json(
                 git_info()
@@ -1066,6 +1077,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self.handle_create_note(
                 data
             )
+
+        if self.path == '/api/cpu-recommend':
+            if not isinstance(data,dict):return self.send_json({'error':'잘못된 요청입니다.'},400)
+            try:return self.send_json(recommendations.submit(data.get('query')),202)
+            except ValueError as exc:return self.send_json({'error':str(exc)},400)
+            except RuntimeError as exc:return self.send_json({'error':str(exc)},429)
 
         if self.path == "/api/git/pull":
             return self.handle_git_pull(data)
