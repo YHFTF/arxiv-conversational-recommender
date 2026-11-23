@@ -1,5 +1,9 @@
 """Lazy persistent CPU recommendation worker; dashboard startup needs no ML imports."""
+import csv
+import gzip
+import logging
 import threading,time,uuid
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -8,6 +12,28 @@ PAPER_LIMIT = 3
 AUTHOR_PAPER_DEPTH = 10
 AUTHOR_LIMIT = 3
 AUTHOR_EVIDENCE_LIMIT = 3
+LOGGER = logging.getLogger(__name__)
+
+
+def paper_citation_counts(raw_path, paper_nodes, sample_edges):
+    """Count distinct incoming citations in the available OGBN-Arxiv graph."""
+    try:
+        incoming = set()
+        with gzip.open(raw_path, 'rt', encoding='utf-8', newline='') as handle:
+            for row in csv.reader(handle):
+                source, target = map(int, row)
+                if target in paper_nodes and source != target:
+                    incoming.add((source, target))
+        scope = 'ogbn_arxiv'
+    except FileNotFoundError:
+        incoming = None
+    except (OSError, ValueError, EOFError):
+        LOGGER.warning('Could not read the original OGBN-Arxiv citation graph.', exc_info=True)
+        incoming = None
+    if incoming is None:
+        incoming = {(source, target) for source, target in sample_edges if source != target}
+        scope = 'sample'
+    return Counter(target for _, target in incoming), scope
 
 
 def recommend_authors(ranked_papers, papers):
@@ -61,6 +87,9 @@ class RecommendationService:
         if file_hash(modelpath)!=selected['model_sha256']:raise ValueError('추천 모델 파일의 해시가 일치하지 않습니다.')
         papers=read(data/'arxiv_master_final.json');ids=[str(p['paper_id']) for p in papers];local={p['node_idx']:i for i,p in enumerate(papers)}
         edges=torch.load(data/'paper_paper_edges.pt',weights_only=True,map_location='cpu').T.tolist()
+        citations, citation_scope = paper_citation_counts(self.root/'dataset/ogbn_arxiv/raw/edge.csv.gz', local, edges)
+        for paper in papers:
+            paper.update(citation_count=citations[paper['node_idx']], citation_scope=citation_scope)
         graph=Graph(None,ids,relations=('citation',),citation_edges=[(ids[local[s]],ids[local[t]]) for s,t in edges])
         extractor=Features(papers,Index(papers),DTMIndex(papers),graph)
         strength=0.;config=base/'route_consensus/selected.json'
@@ -134,7 +163,8 @@ class RecommendationService:
             result['results'] = result['results'][:PAPER_LIMIT]
             for rank,row in enumerate(result['results'],1):
                 paper=self.papers[row.pop('index')]
-                row.update(rank=rank,paper_id=str(paper['paper_id']),title=paper.get('title',''),abstract=paper.get('abstract',''))
+                row.update(rank=rank,paper_id=str(paper['paper_id']),title=paper.get('title',''),abstract=paper.get('abstract',''),
+                           citation_count=paper.get('citation_count'), citation_scope=paper.get('citation_scope'))
                 row['tags']={k:(paper.get('knowledge') or {}).get(k,[]) for k in ('domain','task','method')}
             result['search_ms']=round((time.perf_counter()-started)*1000,1)
             self._update(jid,status='done',message='검색 완료',result=result)

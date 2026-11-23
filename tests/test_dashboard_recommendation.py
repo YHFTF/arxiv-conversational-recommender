@@ -1,5 +1,8 @@
+import gzip
 import time,unittest
-from dashboard.cpu_recommendation import RecommendationService
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from dashboard.cpu_recommendation import RecommendationService, paper_citation_counts
 
 
 class FakeEngine:
@@ -25,15 +28,35 @@ class RecommendationTests(unittest.TestCase):
         loads=[]
         def loader():
             loads.append(1)
-            return FakeEngine(),[{'paper_id':'123','title':'Actual paper','abstract':'Evidence.','knowledge':{'task':['classification']}}]
+            return FakeEngine(), [dict(paper_id='123', title='Actual paper', abstract='Evidence.',
+                                       knowledge={'task': ['classification']}, citation_count=0,
+                                       citation_scope='ogbn_arxiv')]
         s=self.service(loader)
         for query in ('first','second'):
             result=self.finished(s,s.submit(query)['id'])
             self.assertEqual(result['status'],'done')
             self.assertEqual(result['result']['results'][0]['title'],'Actual paper')
+            self.assertEqual(result['result']['results'][0]['citation_count'], 0)
+            self.assertEqual(result['result']['results'][0]['citation_scope'], 'ogbn_arxiv')
             self.assertNotIn('index',result['result']['results'][0])
             self.assertEqual(result['result']['recommended_authors'], [])
         self.assertEqual(len(loads),1)
+
+    def test_citations_count_distinct_incoming_papers_with_the_available_scope(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'edge.csv.gz'
+            nodes = {10, 20, 30}
+            sample_edges = [(10, 20), (10, 20)]
+            counts, scope = paper_citation_counts(path, nodes, sample_edges)
+            self.assertEqual(scope, 'sample')
+            self.assertEqual(counts, {20: 1})
+
+            with gzip.open(path, 'wt') as handle:
+                handle.write('10,20\n10,20\n99,20\n20,10\n10,10\n30,99\n')
+            counts, scope = paper_citation_counts(path, nodes, sample_edges)
+            self.assertEqual(scope, 'ogbn_arxiv')
+            self.assertEqual(counts, {20: 2, 10: 1})
+            self.assertEqual(counts[30], 0)
 
     def test_ranks_authors_by_distinct_candidate_papers_in_one_search(self):
         first = {'author_id': 'A1', 'author_name': 'Same Name'}
