@@ -12,6 +12,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       REQUIRE_GPU: ${REQUIRE_GPU:-true}
       OUTPUT_DIR: /workspace/output
+      OLLAMA_RECOMMEND_URL: ${OLLAMA_RECOMMEND_URL:-http://host.docker.internal:11434}
+      OLLAMA_RECOMMEND_MODEL: ${OLLAMA_RECOMMEND_MODEL:-qwen3.5:9b}
       ARTIFACT_STORAGE_PATH: ${ARTIFACT_STORAGE_PATH:-}
     volumes:
       - .:/workspace

@@ -1080,7 +1080,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         if self.path == '/api/cpu-recommend':
             if not isinstance(data,dict):return self.send_json({'error':'잘못된 요청입니다.'},400)
-            try:return self.send_json(recommendations.submit(data.get('query')),202)
+            try:return self.send_json(recommendations.submit(data.get('query'), data.get('previous_id'), data.get('remove_filter')),202)
             except ValueError as exc:return self.send_json({'error':str(exc)},400)
             except RuntimeError as exc:return self.send_json({'error':str(exc)},429)
 

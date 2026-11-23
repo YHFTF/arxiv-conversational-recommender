@@ -7,11 +7,18 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+if __package__:
+    from .semantic_refinement import ClarificationRequired, SemanticRefiner, candidate_rows
+else:
+    from semantic_refinement import ClarificationRequired, SemanticRefiner, candidate_rows
+
 
 PAPER_LIMIT = 3
+INITIAL_CANDIDATE_LIMIT = 10
 AUTHOR_PAPER_DEPTH = 10
 AUTHOR_LIMIT = 3
 AUTHOR_EVIDENCE_LIMIT = 3
+CLARIFICATION_HISTORY_LIMIT = 3
 LOGGER = logging.getLogger(__name__)
 
 
@@ -66,11 +73,16 @@ def recommend_authors(ranked_papers, papers):
 
 
 class RecommendationService:
-    def __init__(self,root,output,loader=None):
+    def __init__(self,root,output,loader=None,refiner=None):
         self.root=Path(root);self.output=Path(output);self.loader=loader or self._load
+        self.refiner=refiner or SemanticRefiner()
         self.executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='cpu-recommend')
         self.lock=threading.Lock();self.slots=threading.BoundedSemaphore(4)
-        self.jobs={};self.engine=None;self.papers=None
+        self.jobs={};self.conversations={};self.engine=None;self.papers=None
+
+    @property
+    def dataset_path(self):
+        return self.output / 'balanced_benchmark_20261117'
 
     def _load(self):
         import sys
@@ -82,7 +94,7 @@ class RecommendationService:
         from dtm_rank_features import Features
         from query_constraints import GuardedSearch
         torch.set_num_threads(1)
-        base=self.output/'balanced_benchmark_20261117';data=base/'data'
+        base=self.dataset_path;data=base/'data'
         selected=read(base/'learned_dtm_graph/selected.json');modelpath=base/'learned_dtm_graph'/selected['model_file']
         if file_hash(modelpath)!=selected['model_sha256']:raise ValueError('추천 모델 파일의 해시가 일치하지 않습니다.')
         papers=read(data/'arxiv_master_final.json');ids=[str(p['paper_id']) for p in papers];local={p['node_idx']:i for i,p in enumerate(papers)}
@@ -132,18 +144,38 @@ class RecommendationService:
                 config=chosen['config'],model=ranker),papers
         return legacy,papers
 
-    def submit(self,query):
-        if not isinstance(query,str) or not query.strip() or len(query)>2000:raise ValueError('질문을 1~2,000자로 입력해 주세요.')
-        if not self.slots.acquire(blocking=False):raise RuntimeError('검색 요청이 많습니다. 잠시 후 다시 시도해 주세요.')
-        jid=uuid.uuid4().hex
+    def submit(self, query, previous_id=None, remove_filter=None):
+        if remove_filter is None:
+            if not isinstance(query, str) or not query.strip() or len(query) > 2000:
+                raise ValueError('질문을 1~2,000자로 입력해 주세요.')
+            query = query.strip()
+        elif not isinstance(remove_filter, str) or previous_id is None or query is not None:
+            raise ValueError('해제할 탐색 조건을 확인해 주세요.')
+        if previous_id is not None and not isinstance(previous_id, str):
+            raise ValueError('이전 탐색을 확인해 주세요.')
+
+        jid = uuid.uuid4().hex
         with self.lock:
-            if len(self.jobs)>=64:
+            base, topic, criteria, clarifications = None, query, (), ()
+            if previous_id is not None:
+                previous = self.conversations.get(previous_id)
+                if previous is None:
+                    raise ValueError('이전 탐색의 보관 시간이 끝났습니다. 새 탐색을 시작해 주세요.')
+                base, topic, criteria, clarifications = previous
+                if remove_filter is not None and not any(item.id == remove_filter for item in criteria):
+                    raise ValueError('현재 적용 중인 조건만 해제할 수 있습니다.')
+
+            if not self.slots.acquire(blocking=False):
+                raise RuntimeError('검색 요청이 많습니다. 잠시 후 다시 시도해 주세요.')
+            if len(self.jobs) >= 64:
                 for key in list(self.jobs):
-                    if self.jobs[key]['status'] in ('done','error'):
+                    if self.jobs[key]['status'] in ('done', 'clarify', 'error'):
                         del self.jobs[key]
-                        if len(self.jobs)<64:break
-            self.jobs[jid]=dict(id=jid,status='queued',message='검색 대기 중',query=query.strip())
-        self.executor.submit(self._work,jid,query.strip())
+                        self.conversations.pop(key, None)
+                        if len(self.jobs) < 64:
+                            break
+            self.jobs[jid] = dict(id=jid, status='queued', message='검색 대기 중', query=query)
+        self.executor.submit(self._work, jid, base, topic, criteria, query, remove_filter, clarifications)
         return self.get(jid)
 
     def get(self,jid):
@@ -152,22 +184,75 @@ class RecommendationService:
     def _update(self,jid,**values):
         with self.lock:self.jobs[jid].update(values)
 
-    def _work(self,jid,query):
+    def _refine(self, jid, topic, query, initial, criteria, remove_filter, clarifications):
+        if remove_filter is None:
+            self._update(jid, message='후속 질문의 의도를 해석하고 있습니다.')
+            context = {'clarification_history': clarifications} if clarifications else {}
+            remove_filter, criterion = self.refiner.interpret(topic, criteria, query, jid, **context)
+            if criterion is not None:
+                self._update(jid, message='제목과 초록에서 새 조건의 근거를 확인하고 있습니다.')
+                reviewed = self.refiner.review(criterion, candidate_rows(initial, criteria), self.papers, self.engine)
+                return (*criteria, reviewed)
+
+        position = next((i for i, item in enumerate(criteria) if item.id == remove_filter), None)
+        if position is None:
+            raise ValueError('해제할 조건을 찾지 못했습니다. 적용 중인 조건을 확인해 주세요.')
+        self._update(jid, message='조건을 해제하고 남은 조건으로 후보를 다시 확인하고 있습니다.')
+        remaining = criteria[:position]
+        for item in criteria[position+1:]:
+            reviewed = self.refiner.review(item, candidate_rows(initial, remaining), self.papers, self.engine)
+            remaining = (*remaining, reviewed)
+        return remaining
+
+    def _work(self, jid, base, topic, criteria, query, remove_filter, clarifications):
         try:
             if self.engine is None:
                 self._update(jid,status='loading',message='논문 색인과 추천 모델을 준비하고 있습니다. 첫 검색은 시간이 걸릴 수 있습니다.')
                 self.engine,self.papers=self.loader()
             self._update(jid,status='searching',message='질문에 맞는 논문과 조건 근거를 찾고 있습니다.')
-            started=time.perf_counter();result=self.engine.search(query,top_k=AUTHOR_PAPER_DEPTH)
-            result['recommended_authors'] = recommend_authors(result['results'], self.papers)
-            result['results'] = result['results'][:PAPER_LIMIT]
-            for rank,row in enumerate(result['results'],1):
-                paper=self.papers[row.pop('index')]
-                row.update(rank=rank,paper_id=str(paper['paper_id']),title=paper.get('title',''),abstract=paper.get('abstract',''),
-                           citation_count=paper.get('citation_count'), citation_scope=paper.get('citation_scope'))
-                row['tags']={k:(paper.get('knowledge') or {}).get(k,[]) for k in ('domain','task','method')}
-            result['search_ms']=round((time.perf_counter()-started)*1000,1)
-            self._update(jid,status='done',message='검색 완료',result=result)
+            started = time.perf_counter()
+            if base is None:
+                retrieved = self.engine.search(topic, top_k=min(INITIAL_CANDIDATE_LIMIT, len(self.papers)))
+                initial_rows = retrieved['results']
+                self._update(jid, message=f'논문 후보 {len(initial_rows)}편의 제목과 초록을 검토하고 있습니다.')
+                initial_matches = self.refiner.review_initial(topic, initial_rows, self.papers)
+                verified = [dict(row, initial_evidence=initial_matches[row['index']])
+                            for row in initial_rows if row['index'] in initial_matches]
+                base = dict(retrieved, results=verified, initial_candidate_count=len(initial_rows))
+            else:
+                criteria = self._refine(jid, topic, query, base['results'], criteria, remove_filter, clarifications)
+            initial = base['results']
+            candidates = candidate_rows(initial, criteria)
+            cards = []
+            for rank, candidate in enumerate(candidates[:PAPER_LIMIT], 1):
+                row = dict(candidate)
+                index = row.pop('index')
+                paper = self.papers[index]
+                if criteria:
+                    row['followup_evidence'] = [dict(label=item.label, quote=item.matches[index]) for item in criteria]
+                row.update(rank=rank, paper_id=str(paper['paper_id']), title=paper.get('title', ''),
+                           abstract=paper.get('abstract', ''), citation_count=paper.get('citation_count'),
+                           citation_scope=paper.get('citation_scope'))
+                row['tags'] = {key: (paper.get('knowledge') or {}).get(key, [])
+                               for key in ('domain', 'task', 'method')}
+                cards.append(row)
+            result = dict(base, results=cards, recommended_authors=recommend_authors(
+                candidates[:AUTHOR_PAPER_DEPTH], self.papers), conversation=dict(
+                    topic=topic, initial_candidate_count=base['initial_candidate_count'],
+                    initial_verified_candidate_count=len(initial), candidate_count=len(candidates),
+                    filters=[dict(id=item.id, label=item.label) for item in criteria],
+                    reviewed_candidate_count=criteria[-1].reviewed_count if criteria else None),
+                search_ms=round((time.perf_counter()-started)*1000, 1))
+            with self.lock:
+                self.conversations[jid] = (base, topic, criteria, ())
+                self.jobs[jid].update(status='done', message='검색 완료', result=result)
+        except ClarificationRequired as exc:
+            clarification = dict(reason=exc.reason, question=exc.question)
+            exchange = dict(request=query, question=exc.question)
+            history = (*clarifications, exchange)[-CLARIFICATION_HISTORY_LIMIT:]
+            with self.lock:
+                self.conversations[jid] = (base, topic, criteria, history)
+                self.jobs[jid].update(status='clarify', message=str(exc), clarification=clarification)
         except Exception as exc:
             message='추천 준비 파일 또는 실행 환경을 확인해 주세요.'
             if isinstance(exc,FileNotFoundError):message='논문 데이터나 학습된 추천 모델이 없습니다. 서버의 output 경로를 확인해 주세요.'
