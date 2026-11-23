@@ -20,13 +20,33 @@
 
 개발 실행: 프로젝트 가상환경으로 `python dashboard/server.py`. 기존 서버가 실행 중이면 코드 적용을 위해 재시작합니다.
 
+## 관리자 로그인
+
+논문 탐색 대화는 로그인 없이 이용할 수 있습니다. 프로젝트 문서와 Git 정보, 팀 메모, 저장소 동기화, 스크립트·학습·벤치마크 실행 및 작업 로그는 관리자 로그인 후 이용할 수 있습니다.
+
+프로젝트 폴더의 로컬 터미널에서 관리자 비밀번호를 등록합니다.
+
+```powershell
+.\venv\Scripts\python.exe dashboard/server.py --set-admin-password
+```
+
+대시보드의 **관리자 로그인**에서 아이디 `admin`과 설정한 비밀번호를 입력합니다. 비밀번호를 바꿀 때도 같은 명령을 실행하면 기존 세션이 종료됩니다. 기본 비밀번호는 없으며, 등록 전에는 관리자 기능이 잠겨 있습니다. 비밀번호 검증 값은 `DASHBOARD_DATA`의 `admin.json`에 저장되며 기본 로컬 위치는 `.dashboard-data/admin.json`입니다. 로그아웃이나 서버 재시작 시에도 세션이 종료되며, 한 세션은 최대 8시간 유지됩니다.
+
+Docker에서 비밀번호를 등록하려면 같은 Compose 프로젝트의 데이터 볼륨을 사용합니다.
+
+```bash
+docker compose -f docker-compose.dashboard.yml run --rm dashboard python dashboard/server.py --set-admin-password
+```
+
+서버는 호스트의 루프백 주소에 기본 바인딩됩니다. 같은 PC에서는 `http://localhost:8080`으로 접속하고, 외부에서 접속할 때는 HTTPS를 제공하는 프록시나 Cloudflare Tunnel을 사용합니다.
+
 Git 기록, 브랜치, GitHub 이슈, 팀 메모, 학습 및 벤치마크 실행을 관리하는 대시보드입니다.
 
 ```bash
 docker compose -f docker-compose.dashboard.yml up --build
 ```
 
-브라우저에서 `http://localhost:8080`을 엽니다. 포트는 호스트의 모든 IPv4 인터페이스(`0.0.0.0:8080`)에 공개되므로, 같은 로컬 네트워크에서는 `http://<호스트-IP>:8080`으로 접속할 수 있습니다. 기본 빌드는 모델 학습과 벤치마크에 필요한 CUDA용 ML 패키지를 모두 설치합니다. 대시보드만 빠르게 실행하는 경량 이미지가 필요하면 `INSTALL_ML_DEPS=false`로 빌드합니다.
+브라우저에서 `http://localhost:8080`을 엽니다. Compose는 대시보드 포트를 호스트의 루프백에 게시합니다. 기본 빌드는 모델 학습과 벤치마크에 필요한 CUDA용 ML 패키지를 모두 설치합니다. 대시보드만 빠르게 실행하는 경량 이미지가 필요하면 `INSTALL_ML_DEPS=false`로 빌드합니다.
 
 기본 이미지는 CUDA 12.4용 PyTorch를 포함하며 GPU가 없으면 CPU로 폴백합니다. NVIDIA Container Toolkit이 설치된 GPU 호스트에서는 GPU 오버레이를 함께 실행합니다.
 

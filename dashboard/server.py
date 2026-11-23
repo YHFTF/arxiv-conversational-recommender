@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
+import csv
+import gzip
 import json
 import os
 import re
@@ -13,6 +16,7 @@ import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+from http.cookies import CookieError, SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -39,6 +43,7 @@ DATA = Path(
 )
 
 NOTES = DATA / "notes.json"
+ADMIN_CREDENTIALS = DATA / "admin.json"
 
 OUTPUT = Path(
     os.getenv("OUTPUT_DIR", ROOT / "output")
@@ -75,12 +80,57 @@ jobs: dict[str, dict] = {}
 job_processes: dict[str, subprocess.Popen] = {}
 jobs_lock = threading.Lock()
 if __package__:
+    from .admin_auth import AdminAuth, COOKIE_NAME, SESSION_SECONDS, set_admin_password
     from .cpu_recommendation import RecommendationService
 else:
     # Support direct script execution and importlib-based entry-point checks.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from admin_auth import AdminAuth, COOKIE_NAME, SESSION_SECONDS, set_admin_password
     from cpu_recommendation import RecommendationService
 recommendations = RecommendationService(ROOT, OUTPUT)
+
+
+def paper_dataset_structure(dataset_path: Path, source_path: Path) -> dict:
+    audit = json.loads((dataset_path / "data_audit.json").read_text(encoding="utf-8"))
+    counts = audit["category_counts"]
+    papers = audit["papers"]
+    if sum(counts.values()) != papers:
+        raise ValueError("Category counts do not match the paper total")
+
+    category_codes = {}
+    try:
+        with gzip.open(
+            source_path / "mapping/labelidx2arxivcategeory.csv.gz",
+            "rt", encoding="utf-8", newline="",
+        ) as mapping:
+            for row in csv.DictReader(mapping):
+                _, archive, subject = row["arxiv category"].split()
+                category_codes[row["label idx"]] = f"{archive}.{subject.upper()}"
+    except (OSError, EOFError, ValueError, KeyError):
+        pass
+
+    source = {}
+    for key, filename in (
+        ("papers", "num-node-list.csv.gz"),
+        ("citationEdges", "num-edge-list.csv.gz"),
+    ):
+        try:
+            with gzip.open(source_path / "raw" / filename, "rt", encoding="utf-8") as count:
+                source[key] = int(count.readline())
+        except (OSError, EOFError, ValueError):
+            pass
+
+    return {
+        "papers": papers,
+        "citationEdges": audit["citation_edges"],
+        "authorEdges": audit["author_edges"],
+        "dtmSuccess": audit["dtm_status"].get("success", 0),
+        "categories": [
+            {"id": int(label), "code": category_codes.get(label), "papers": count}
+            for label, count in sorted(counts.items(), key=lambda item: (-item[1], int(item[0])))
+        ],
+        "source": source,
+    }
 
 
 # ---------------------------------------------------------------------
@@ -922,6 +972,24 @@ def worker(
 # HTTP Handler
 # ---------------------------------------------------------------------
 
+PUBLIC_ASSETS = {
+    "/", "/index.html", "/app.js", "/live-recommendation.js",
+    "/styles.css", "/gpu.css", "/recommendation.css",
+}
+CHAT_JOB_PATH = re.compile(r"/api/cpu-recommend/([0-9a-f]{32})")
+ADMIN_LOGIN_ERRORS = {
+    401: "관리자 아이디 또는 비밀번호가 올바르지 않습니다.",
+    429: "로그인 시도가 많습니다. 잠시 후 다시 시도해 주세요.",
+    503: "이 서버에 관리자 비밀번호가 설정되지 않았습니다.",
+}
+
+
+class DashboardServer(ThreadingHTTPServer):
+    def __init__(self, address, credentials=ADMIN_CREDENTIALS):
+        self.admin_auth = AdminAuth(credentials)
+        super().__init__(address, Handler)
+
+
 class Handler(SimpleHTTPRequestHandler):
     """Serve dashboard static assets and JSON API endpoints."""
 
@@ -940,6 +1008,8 @@ class Handler(SimpleHTTPRequestHandler):
         self,
         data,
         status: int = 200,
+        *,
+        session_cookie: str | None = None,
     ) -> None:
         """Serialize and send a JSON response."""
 
@@ -965,10 +1035,40 @@ class Handler(SimpleHTTPRequestHandler):
             "no-store",
         )
 
+        if session_cookie is not None:
+            age = SESSION_SECONDS if session_cookie else 0
+            self.send_header(
+                "Set-Cookie",
+                f"{COOKIE_NAME}={session_cookie}; Max-Age={age}; "
+                "Path=/; Secure; HttpOnly; SameSite=Strict",
+            )
         self.end_headers()
         self.wfile.write(body)
 
-    def payload(self) -> dict:
+    def end_headers(self):
+        if getattr(self, "path", "").partition("?")[0] in {"/", "/index.html"}:
+            self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header(
+            "Content-Security-Policy",
+            "script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        )
+        super().end_headers()
+
+    def session_token(self):
+        cookies = SimpleCookie()
+        try:
+            cookies.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            return None
+        cookie = cookies.get(COOKIE_NAME)
+        return cookie.value if cookie else None
+
+    def authenticated(self):
+        return self.server.admin_auth.is_authenticated(self.session_token())
+
+    def payload(self, limit=256 * 1024) -> dict:
         """Read and decode a JSON request body."""
 
         content_length = int(
@@ -978,19 +1078,44 @@ class Handler(SimpleHTTPRequestHandler):
             )
         )
 
-        raw_body = self.rfile.read(
-            content_length
-        )
+        if not 0 < content_length <= limit:
+            raise ValueError("Invalid request size")
+        data = json.loads(self.rfile.read(content_length))
+        if not isinstance(data, dict):
+            raise ValueError("Expected a JSON object")
+        return data
 
-        return json.loads(
-            raw_body or b"{}"
+    def handle_login(self, data):
+        try:
+            origin = urlparse(self.headers.get("Origin", ""))
+            secure_origin = origin.hostname and (
+                origin.scheme == "https"
+                or (origin.scheme == "http" and origin.hostname in {"localhost", "127.0.0.1", "::1"})
+            )
+        except ValueError:
+            secure_origin = False
+        if not secure_origin:
+            return self.send_json({"error": "HTTPS 또는 로컬 주소에서 로그인하세요."}, 403)
+
+        status, token = self.server.admin_auth.login(
+            data.get("username"), data.get("password"), self.session_token(),
         )
+        if status != 200:
+            return self.send_json({"error": ADMIN_LOGIN_ERRORS[status]}, status)
+        return self.send_json({"authenticated": True}, session_cookie=token)
+
+    def do_HEAD(self):
+        if self.path.partition("?")[0] in PUBLIC_ASSETS:
+            return super().do_HEAD()
+        self.send_error(404)
 
     def do_GET(self) -> None:
         """Handle GET requests."""
 
-        parsed_url = urlparse(self.path)
-        path = parsed_url.path
+        path = self.path.partition("?")[0]
+
+        if path in PUBLIC_ASSETS:
+            return super().do_GET()
 
         if path == "/api/health":
             return self.send_json(
@@ -1000,9 +1125,31 @@ class Handler(SimpleHTTPRequestHandler):
                 }
             )
 
-        if path.startswith('/api/cpu-recommend/'):
-            job=recommendations.get(path.rsplit('/',1)[-1])
-            return self.send_json(job if job else {'error':'검색 요청을 찾을 수 없습니다.'},200 if job else 404)
+        if path == "/api/auth/session":
+            return self.send_json({"authenticated": self.authenticated()})
+
+        if path == "/api/data-structure":
+            try:
+                structure = paper_dataset_structure(
+                    recommendations.dataset_path, ROOT / "dataset/ogbn_arxiv"
+                )
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                return self.send_json({"error": "논문 데이터 집계를 불러오지 못했습니다."}, 503)
+            return self.send_json(structure)
+
+        if match := CHAT_JOB_PATH.fullmatch(path):
+            job = recommendations.get(match[1])
+            return self.send_json(
+                job if job else {"error": "검색 요청을 찾을 수 없습니다."},
+                200 if job else 404,
+            )
+
+        if not path.startswith("/api/"):
+            return self.send_error(404)
+        if not self.authenticated():
+            return self.send_json({"error": "관리자 로그인이 필요합니다."}, 401)
+
+        parsed_url = urlparse(self.path)
 
         if path == "/api/git":
             return self.send_json(
@@ -1054,13 +1201,24 @@ class Handler(SimpleHTTPRequestHandler):
                 path
             )
 
-        return super().do_GET()
+        return self.send_json({"error": "지원하지 않는 요청입니다."}, 404)
 
     def do_POST(self) -> None:
         """Handle POST requests."""
 
+        public_post = self.path in {"/api/auth/login", "/api/cpu-recommend"}
+        if not public_post and not self.authenticated():
+            return self.send_json({"error": "관리자 로그인이 필요합니다."}, 401)
+
+        # A cross-origin form cannot add this header. No CORS access is granted.
+        if self.path != "/api/cpu-recommend" and self.headers.get("X-Dashboard-Request") != "1":
+            return self.send_json({"error": "허용되지 않은 요청입니다."}, 403)
+        if self.headers.get_content_type() != "application/json":
+            return self.send_json({"error": "JSON 요청이 필요합니다."}, 415)
+
         try:
-            data = self.payload()
+            limit = 4096 if self.path == "/api/auth/login" else 256 * 1024
+            data = self.payload(limit)
 
         except (
             json.JSONDecodeError,
@@ -1073,13 +1231,19 @@ class Handler(SimpleHTTPRequestHandler):
                 400,
             )
 
+        if self.path == "/api/auth/login":
+            return self.handle_login(data)
+
+        if self.path == "/api/auth/logout":
+            self.server.admin_auth.logout(self.session_token())
+            return self.send_json({"authenticated": False}, session_cookie="")
+
         if self.path == "/api/notes":
             return self.handle_create_note(
                 data
             )
 
         if self.path == '/api/cpu-recommend':
-            if not isinstance(data,dict):return self.send_json({'error':'잘못된 요청입니다.'},400)
             try:return self.send_json(recommendations.submit(data.get('query'), data.get('previous_id'), data.get('remove_filter')),202)
             except ValueError as exc:return self.send_json({'error':str(exc)},400)
             except RuntimeError as exc:return self.send_json({'error':str(exc)},429)
@@ -1477,6 +1641,12 @@ class Handler(SimpleHTTPRequestHandler):
 def main() -> None:
     """Start the dashboard server."""
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--set-admin-password", action="store_true")
+    if parser.parse_args().set_admin_password:
+        set_admin_password(ADMIN_CREDENTIALS)
+        return
+
     DATA.mkdir(
         parents=True,
         exist_ok=True,
@@ -1489,17 +1659,9 @@ def main() -> None:
         )
     )
 
-    print(
-        f"Dashboard http://0.0.0.0:{port}"
-    )
-
-    server = ThreadingHTTPServer(
-        (
-            "0.0.0.0",
-            port,
-        ),
-        Handler,
-    )
+    host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
+    server = DashboardServer((host, port))
+    print(f"Dashboard http://{host}:{port}")
 
     server.serve_forever()
 

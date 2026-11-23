@@ -3,9 +3,10 @@ services:
     image: ${DASHBOARD_IMAGE:-ghcr.io/yhftf/arxiv-conversational-recommender-dashboard:main}
     pull_policy: always
     ports:
-      - "0.0.0.0:${DASHBOARD_PORT:-8080}:8080"
+      - "127.0.0.1:${DASHBOARD_PORT:-8080}:8080"
     environment:
       PROJECT_ROOT: /workspace
+      DASHBOARD_HOST: 0.0.0.0
       DASHBOARD_DATA: /dashboard-data
       GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-YHFTF/arxiv-conversational-recommender}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}

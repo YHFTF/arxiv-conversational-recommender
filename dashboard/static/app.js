@@ -17,12 +17,13 @@ const COLAB_URL =
   'https://colab.research.google.com/github/YHFTF/arxiv-conversational-recommender/blob/main/notebooks/GPU_Workbench.ipynb';
 
 const PAGE_NAMES = {
-  home: '프로젝트 컨트롤 센터',
-  project: '프로젝트 설명',
-  scripts: '라이브 스크립트 실행',
+  home: '개요',
+  project: '프로젝트',
+  scripts: '스크립트 실행',
   learn: '모델 학습',
-  benchmark: '성능 벤치마크',
-  production: '논문 추천',
+  benchmark: '벤치마크',
+  production: '논문 탐색',
+  'data-structure': '데이터 구조',
 };
 
 const JOB_STATUS_TEXT = {
@@ -47,6 +48,9 @@ let issues = [];
 
 let currentJobId = null;
 let jobPollTimer = null;
+let toastTimer;
+let isAdmin = false;
+let hasLivePaperStructure = false;
 
 
 function setButtonBusy(button, busy, label = '') {
@@ -68,18 +72,6 @@ function setButtonBusy(button, busy, label = '') {
 }
 
 
-function initButtonFeedback() {
-  document.addEventListener('click', (event) => {
-    const button = event.target.closest('button');
-    if (!button || button.disabled) return;
-    button.classList.remove('button-pop');
-    void button.offsetWidth;
-    button.classList.add('button-pop');
-    window.setTimeout(() => button.classList.remove('button-pop'), 360);
-  });
-}
-
-
 // ============================================================
 // API
 // ============================================================
@@ -88,6 +80,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: {
       'Content-Type': 'application/json',
+      'X-Dashboard-Request': '1',
     },
     ...options,
   });
@@ -95,6 +88,9 @@ async function api(path, options = {}) {
   const data = await response.json();
 
   if (!response.ok) {
+    if (response.status === 401 && isAdmin) {
+      window.location.reload();
+    }
     const error = new Error(
       data.error ||
       data.output ||
@@ -152,13 +148,12 @@ function showToast(message, isError = false) {
   const toast = $('#toast');
 
   toast.textContent = message;
-  toast.style.background = isError
-    ? '#ff637d'
-    : 'white';
+  toast.classList.toggle('toast-error', isError);
 
   toast.classList.add('show');
 
-  setTimeout(() => {
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
     toast.classList.remove('show');
   }, 2800);
 }
@@ -169,6 +164,7 @@ function showToast(message, isError = false) {
 // ============================================================
 
 function navigate(pageId) {
+  if (!isAdmin && pageId !== 'data-structure') pageId = 'production';
   $$('.page').forEach((page) => {
     page.classList.toggle(
       'active',
@@ -177,35 +173,159 @@ function navigate(pageId) {
   });
 
   $$('aside nav button').forEach((button) => {
-    button.classList.toggle(
-      'active',
-      button.dataset.page === pageId,
-    );
+    const active = button.dataset.page === pageId;
+    button.classList.toggle('active', active);
+    if (active) {
+      button.setAttribute('aria-current', 'page');
+    } else {
+      button.removeAttribute('aria-current');
+    }
   });
 
   $('#title').textContent = PAGE_NAMES[pageId];
-  location.hash = pageId;
 
   if (pageId === 'project') {
     loadDocs();
   }
+  if (pageId === 'data-structure') {
+    loadPaperStructure();
+  }
+  document.dispatchEvent(new Event('dashboard:navigate'));
 }
 
 
 function initNavigation() {
-  $$('aside nav button').forEach((button) => {
-    button.onclick = () => {
-      navigate(button.dataset.page);
-    };
+  $$('aside nav button, [data-destination], .brand').forEach((control) => {
+    control.addEventListener('click', (event) => {
+      event.preventDefault();
+      const pageId = control.dataset.page || control.dataset.destination || (isAdmin ? 'home' : 'production');
+      if (location.hash !== `#${pageId}`) {
+        history.pushState(null, '', `#${pageId}`);
+      }
+      navigate(pageId);
+      window.scrollTo(0, 0);
+      const heading = $(`#${pageId} h1`);
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    });
   });
 
-  const pageFromHash = location.hash.slice(1);
+  $('.skip-link').addEventListener('click', (event) => {
+    event.preventDefault();
+    $('#dashboard-content').focus();
+  });
 
-  navigate(
-    PAGE_NAMES[pageFromHash]
-      ? pageFromHash
-      : 'home',
-  );
+  const pageFromLocation = () => {
+    const pageId = location.hash.slice(1);
+    return Object.hasOwn(PAGE_NAMES, pageId) ? pageId : (isAdmin ? 'home' : 'production');
+  };
+  navigate(pageFromLocation());
+  window.addEventListener('hashchange', () => {
+    navigate(pageFromLocation());
+    window.scrollTo(0, 0);
+  });
+}
+
+
+function initTheme() {
+  const toggle = $('#theme-toggle');
+  const root = document.documentElement;
+  try {
+    if (localStorage.getItem('arxiv-dashboard-theme') === 'dark') {
+      root.dataset.theme = 'dark';
+    }
+  } catch {
+    // The default theme also works when browser storage is unavailable.
+  }
+  const updateToggle = () => {
+    const dark = root.dataset.theme === 'dark';
+    toggle.setAttribute('aria-pressed', String(dark));
+    toggle.title = dark ? '기본 테마로 전환' : '다크 모드로 전환';
+  };
+
+  updateToggle();
+  toggle.addEventListener('click', () => {
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    updateToggle();
+    try {
+      localStorage.setItem('arxiv-dashboard-theme', root.dataset.theme);
+    } catch {
+      // The theme still switches when browser storage is unavailable.
+    }
+  });
+}
+
+async function loadPaperStructure() {
+  const status = $('#paper-schema-status');
+  if (status.getAttribute('aria-busy') === 'true') return;
+
+  const retry = $('#paper-schema-retry');
+  status.setAttribute('aria-busy', 'true');
+  retry.hidden = true;
+  try {
+    // Older servers may return a 401 for this route even with a valid session.
+    const response = await fetch('/api/data-structure', {signal: AbortSignal.timeout(4000)});
+    if (!response.ok) throw new Error('Data structure API unavailable');
+    renderPaperStructure(await response.json());
+    hasLivePaperStructure = true;
+    status.hidden = true;
+  } catch {
+    if (hasLivePaperStructure) {
+      status.textContent = '최신 집계를 불러오지 못했습니다. 이전 집계를 표시합니다.';
+    } else {
+      const snapshot = JSON.parse($('#paper-dataset-snapshot').textContent);
+      renderPaperStructure(snapshot);
+      status.textContent = `${snapshot.asOf} 기준 집계 · 서버 집계에 연결되면 갱신됩니다.`;
+    }
+    status.hidden = false;
+    retry.hidden = false;
+  } finally {
+    status.removeAttribute('aria-busy');
+  }
+}
+
+function renderPaperStructure(data) {
+  const format = new Intl.NumberFormat('ko-KR');
+  const counts = {
+    '#paper-schema-total': `${format.format(data.papers)}편`,
+    '#paper-schema-authors': `${format.format(data.authorEdges)}개 연결`,
+    '#paper-schema-citations': `${format.format(data.citationEdges)}개 연결`,
+    '#paper-schema-topics': `${format.format(data.categories.length)}개 분야`,
+  };
+  for (const [selector, label] of Object.entries(counts)) {
+    const element = $(selector);
+    element.textContent = label;
+    element.hidden = false;
+  }
+
+  const source = $('#paper-schema-source-counts');
+  const sourceCounts = [];
+  if (Number.isInteger(data.source.papers)) {
+    sourceCounts.push(`논문 ${format.format(data.source.papers)}편`);
+  }
+  if (Number.isInteger(data.source.citationEdges)) {
+    sourceCounts.push(`인용 ${format.format(data.source.citationEdges)}개 연결`);
+  }
+  source.textContent = sourceCounts.join(' · ');
+  source.hidden = !sourceCounts.length;
+  $('#paper-schema-dtm-count').textContent = ` · ${format.format(data.dtmSuccess)}편 추출 완료`;
+
+  const maxCount = Math.max(1, ...data.categories.map((category) => category.papers));
+  $('#paper-distribution-chart').replaceChildren(...data.categories.map((category) => {
+    const row = document.createElement('li');
+    const label = document.createElement('span');
+    label.textContent = category.code || `분야 ${category.id}`;
+    const bar = document.createElement('span');
+    bar.className = 'paper-distribution-bar';
+    bar.style.setProperty('--bar-width', `${category.papers / maxCount * 100}%`);
+    bar.setAttribute('aria-hidden', 'true');
+    const count = document.createElement('span');
+    count.textContent = `${format.format(category.papers)}편`;
+    row.append(label, bar, count);
+    return row;
+  }));
+  $('#paper-distribution-total').textContent = `${format.format(data.categories.length)}개 분야`;
+  $('#paper-distribution').hidden = false;
 }
 
 
@@ -230,8 +350,8 @@ async function loadGit() {
   try {
     gitState = await api('/api/git');
 
-    $('#branch-pill').textContent =
-      `● ${gitState.branch}`;
+    $('#branch-pill').textContent = gitState.branch;
+    $('#branch-pill').title = gitState.branch;
 
     $('#hero-branch').textContent =
       gitState.branch;
@@ -239,7 +359,9 @@ async function loadGit() {
     $('#repo-state').textContent =
       gitState.dirty
         ? `미커밋 변경 ${gitState.changes}개`
-        : '작업 트리 깨끗함';
+        : '변경 없음';
+    $('#repo-state').dataset.state = gitState.dirty ? 'dirty' : 'clean';
+    $('#change-count').textContent = gitState.changes;
 
     $('#commit-count').textContent =
       gitState.commits.length;
@@ -249,6 +371,8 @@ async function loadGit() {
 
     renderCommits(gitState.commits);
   } catch (error) {
+    $('#repo-state').textContent = '조회 실패';
+    $('#repo-state').dataset.state = 'dirty';
     showToast(error.message, true);
   }
 }
@@ -405,7 +529,7 @@ async function loadIssues(filter = 'all') {
       data.repo || 'GitHub';
 
     $('#issue-count').textContent =
-      issues.length;
+      data.error ? '—' : issues.length;
 
     renderIssueFilters(filter);
     renderIssues(filter);
@@ -455,6 +579,7 @@ function renderIssueFilters(activeFilter) {
         <button
           data-f="${filter}"
           class="${filter === activeFilter ? 'active' : ''}"
+          aria-pressed="${filter === activeFilter}"
         >
           ${filter.toUpperCase()}
           ${count}
@@ -472,10 +597,9 @@ function renderIssueFilters(activeFilter) {
 
 function renderIssues(filter) {
   $$('#filters button').forEach((button) => {
-    button.classList.toggle(
-      'active',
-      button.dataset.f === filter,
-    );
+    const active = button.dataset.f === filter;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
   });
 
   const filteredIssues = issues.filter(
@@ -572,6 +696,12 @@ async function submitNote(event) {
 
   const author = $('#author').value;
   const content = $('#content').value;
+  const status = $('#note-status');
+  const button = $('button', event.currentTarget);
+  if (button.disabled) return;
+  setButtonBusy(button, true, '등록 중…');
+  status.textContent = '';
+  status.dataset.error = 'false';
 
   try {
     await api('/api/notes', {
@@ -582,24 +712,31 @@ async function submitNote(event) {
       }),
     });
 
-    localStorage.setItem(
-      'author',
-      author,
-    );
+    try {
+      localStorage.setItem('author', author);
+    } catch {
+      // Memo submission does not require browser storage.
+    }
 
     $('#content').value = '';
 
     loadNotes();
-    showToast('메모를 등록했습니다.');
+    status.textContent = '메모를 등록했습니다.';
   } catch (error) {
-    showToast(error.message, true);
+    status.dataset.error = 'true';
+    status.textContent = error.message;
+  } finally {
+    setButtonBusy(button, false);
   }
 }
 
 
 function initNotes() {
-  $('#author').value =
-    localStorage.getItem('author') || '';
+  try {
+    $('#author').value = localStorage.getItem('author') || '';
+  } catch {
+    // The author can still be entered by hand.
+  }
 
   $('#note-form').onsubmit =
     submitNote;
@@ -1176,9 +1313,78 @@ function bindEvents() {
 // Initialization
 // ============================================================
 
-function init() {
-  initButtonFeedback();
+async function initAdmin() {
+  const dialog = $('#admin-dialog');
+  const form = $('#admin-form');
+  const login = $('#admin-login');
+  const logout = $('#admin-logout');
+  const errorMessage = $('#admin-error');
+  const submit = $('button[type="submit"]', form);
+
+  login.onclick = () => {
+    errorMessage.hidden = window.isSecureContext;
+    errorMessage.textContent = window.isSecureContext ? '' : 'HTTPS 주소에서 로그인하세요.';
+    submit.disabled = !window.isSecureContext;
+    dialog.showModal();
+  };
+  $('#admin-cancel').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => { $('#admin-password').value = ''; });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!window.isSecureContext || submit.disabled) return;
+    setButtonBusy(submit, true, '로그인 중…');
+    errorMessage.hidden = true;
+    const credentials = Object.fromEntries(new FormData(form));
+    $('#admin-password').value = '';
+    try {
+      await api('/api/auth/login', {method: 'POST', body: JSON.stringify(credentials)});
+      const session = await api('/api/auth/session');
+      if (!session.authenticated) throw new Error('브라우저가 로그인 쿠키를 저장하지 못했습니다.');
+      history.replaceState(null, '', '#home');
+      window.location.reload();
+    } catch (error) {
+      errorMessage.textContent = error.message;
+      errorMessage.hidden = false;
+    } finally {
+      setButtonBusy(submit, false);
+    }
+  });
+
+  logout.onclick = async () => {
+    setButtonBusy(logout, true, '로그아웃 중…');
+    try {
+      await api('/api/auth/logout', {method: 'POST', body: '{}'});
+      history.replaceState(null, '', '#production');
+      window.location.reload();
+    } catch (error) {
+      showToast(error.message, true);
+      setButtonBusy(logout, false);
+    }
+  };
+
+  try {
+    ({authenticated: isAdmin} = await api('/api/auth/session'));
+  } catch {
+    // Keep the chat available even when administrator status is unavailable.
+  }
+  $$('[data-admin-only]').forEach((element) => { element.hidden = !isAdmin; });
+  login.hidden = isAdmin;
+  logout.hidden = !isAdmin;
+  if (isAdmin) {
+    $('.brand').href = '#home';
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) window.location.reload();
+    });
+  }
+}
+
+async function init() {
+  initTheme();
+  await initAdmin();
+  $('#paper-schema-retry').onclick = loadPaperStructure;
   initNavigation();
+  if (!isAdmin) return;
   initColabLinks();
   initNotes();
   initTasks();

@@ -1,47 +1,64 @@
-.task-actions {
+.task-controls {
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.task-actions, .control-row {
     display: flex;
-    gap: 10px;
-    margin-top: 18px
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
 }
 
-.task-actions button,
-.task-actions a,
-.task-actions select {
-    width: 210px;
+.task-actions select, .control-row select {
+    flex: 1 1 220px;
+    width: 0;
+}
+
+.task-actions select { max-width: 360px; }
+.control-row { margin-bottom: 18px; }
+.operations .control-row { margin: 12px 0 0; }
+
+.stop-button {
+    border-color: var(--danger);
+    background: var(--danger-wash);
+    color: var(--danger);
+}
+
+@media (hover: hover) {
+    .stop-button:not(:disabled):hover { border-color: var(--danger); background: var(--danger); color: var(--surface); }
+}
+
+#learn .two { grid-template-columns: minmax(240px, .7fr) minmax(0, 1fr); margin-top: 16px; }
+.task ol { margin: 14px 0 0; padding-left: 26px; }
+.task ol li { padding: 10px 0 10px 4px; border-top: 1px solid var(--line); }
+.task ol li::marker { color: var(--accent-text); font-family: var(--mono); font-weight: 700; }
+
+.console-wrap pre {
+    height: clamp(260px, 45vh, 520px);
     margin: 0;
-    padding: 12px;
-    border: 0;
-    text-align: center;
-    font-weight: 750;
-    text-decoration: none
+    padding: 16px;
+    overflow: auto;
+    border-radius: var(--control-radius);
+    background: var(--terminal);
+    color: var(--terminal-ink);
+    font-size: .875rem;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
-.task-actions select,
-.control-row select {
-    background: #0b1018;
-    color: var(--text);
-    border: 1px solid #465165
-}
+.console-wrap pre:focus-visible { outline-offset: -3px; outline-color: #aac8ff; }
+.models { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; padding: 0; list-style: none; }
+.models li { padding: 5px 9px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--surface); font: 600 .8125rem/1.5 var(--mono); }
+.models li:last-child { background: var(--accent-wash); color: var(--accent-text); }
 
-.task-actions button {
-    background: var(--lime);
-    color: #10141c
-}
-
-.task-actions .colab-button {
-    background: #f3f5f8;
-    color: #1d2430;
-    border: 1px solid #fff
-}
-
-@media(max-width:620px) {
-    .task-actions {
-        flex-direction: column
-    }
-
-    .task-actions button,
-    .task-actions a,
-    .task-actions select {
-        width: 100%
-    }
+@media (max-width: 650px) {
+    #learn .two { grid-template-columns: minmax(0, 1fr); }
+    .task-controls { padding: 15px; }
+    .task-actions select, .control-row select { flex-basis: 100%; width: 100%; max-width: none; }
+    .task-actions button, .task-actions a, .control-row button { flex: 1 1 auto; }
+    .console-wrap pre { padding: 12px; }
 }

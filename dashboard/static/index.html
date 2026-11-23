@@ -1,61 +1,100 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" data-theme="light">
 
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="description" content="arXiv 논문 탐색, 지식 그래프 모델 학습 및 벤치마크를 위한 연구 작업공간">
+    <meta name="color-scheme" content="light dark">
     <title>Arxiv Intelligence</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-    <link rel="stylesheet" href="/styles.css?v=20260916-12">
-    <link rel="stylesheet" href="/gpu.css?v=20260916-2">
-    <link rel="stylesheet" href="/recommendation.css?v=20261122-1">
+    <link rel="stylesheet" href="/styles.css?v=20261123-4">
+    <link rel="stylesheet" href="/gpu.css?v=20261123-2">
+    <link rel="stylesheet" href="/recommendation.css?v=20261123-7">
 </head>
 
 <body>
-    <aside><a class="brand"><b>AI</b><span>ARXIV<br>INTELLIGENCE</span></a>
-        <nav><button data-page="home" class="active">◆ <span>홈</span></button><button data-page="project">◆ <span>프로젝트
-                    설명</span></button><button data-page="scripts">◆ <span>스크립트 실행</span></button><button data-page="learn">◆ <span>학습</span></button><button
-                data-page="benchmark">◆ <span>벤치마크</span></button><button data-page="production">◆
-                <span>실사용</span></button></nav>
-        <footer><i></i><span>시스템 온라인</span></footer>
+    <a class="skip-link" href="#dashboard-content">본문으로 건너뛰기</a>
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <symbol id="icon-mark" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z M4 7.5l8 4.5 8-4.5M12 12v9M8 5.25l8 4.5"/></symbol>
+        <symbol id="icon-home" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+        <symbol id="icon-docs" viewBox="0 0 24 24"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1v15"/></symbol>
+        <symbol id="icon-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></symbol>
+        <symbol id="icon-model" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M10 10h4v4h-4zM9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3"/></symbol>
+        <symbol id="icon-chart" viewBox="0 0 24 24"><path d="M4 4v16h16M8 15v-3m5 3V9m5 6V5"/></symbol>
+        <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+        <symbol id="icon-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v10m12-10c0 5-4 7-12 7"/></symbol>
+        <symbol id="icon-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M2 12h6m8 0h6"/></symbol>
+        <symbol id="icon-issue" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4m0 4h.01"/></symbol>
+        <symbol id="icon-status" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="m8 12 2.5 2.5 5-5"/></symbol>
+        <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6m2-11v5h-5"/></symbol>
+        <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20 15A8.5 8.5 0 0 1 9 4a8.5 8.5 0 1 0 11 11Z"/></symbol>
+        <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+        <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+        <symbol id="icon-external" viewBox="0 0 24 24"><path d="M13 5h6v6m0-6-8 8m8 1v5H5V5h5"/></symbol>
+    </svg>
+    <aside class="sidebar">
+        <a class="brand" href="#production"><span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#icon-mark"/></svg></span><span>arXiv Intelligence<small>연구 작업공간</small></span></a>
+        <nav aria-label="대시보드 메뉴">
+            <span class="nav-group">작업공간</span>
+            <button data-page="home" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-home"/></svg><span>개요</span></button>
+            <button data-page="production" class="active" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg><span>논문 탐색</span></button>
+            <button data-page="data-structure"><svg class="icon" aria-hidden="true"><use href="#icon-branch"/></svg><span>데이터 구조</span></button>
+            <button data-page="project" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-docs"/></svg><span>프로젝트</span></button>
+            <span class="nav-group" data-admin-only hidden>실험 환경</span>
+            <button data-page="scripts" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-terminal"/></svg><span>스크립트</span></button>
+            <button data-page="learn" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-model"/></svg><span>모델 학습</span></button>
+            <button data-page="benchmark" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-chart"/></svg><span>벤치마크</span></button>
+        </nav>
+        <footer><a class="github-link" href="https://github.com/YHFTF/arxiv-conversational-recommender" target="_blank" rel="noopener noreferrer">GitHub 저장소 <svg class="icon" aria-hidden="true"><use href="#icon-external"/></svg></a></footer>
     </aside>
-    <main>
-        <header>
-            <div><small>RESEARCH OPERATIONS / TEAM WORKSPACE</small>
-                <h1 id="title">프로젝트 컨트롤 센터</h1>
+    <div class="workspace">
+        <header class="topbar">
+            <div class="breadcrumbs">
+                <span class="breadcrumb-root">연구 작업공간</span><span class="breadcrumb-divider" aria-hidden="true">/</span>
+                <span class="mobile-brand"><svg class="icon" aria-hidden="true"><use href="#icon-mark"/></svg><span>arXiv Intelligence</span></span>
+                <span id="title">논문 탐색</span>
             </div>
-            <div><a class="github-link" href="https://github.com/YHFTF/arxiv-conversational-recommender" target="_blank" rel="noopener noreferrer">GitHub ↗</a><code id="branch-pill">● branch</code><button id="refresh">새로고침 ↻</button></div>
+            <div class="topbar-actions">
+                <span class="current-branch" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-branch"/></svg><code id="branch-pill">—</code></span>
+                <a class="mobile-github icon-button" href="https://github.com/YHFTF/arxiv-conversational-recommender" target="_blank" rel="noopener noreferrer" aria-label="GitHub 저장소"><svg class="icon" aria-hidden="true"><use href="#icon-external"/></svg></a>
+                <button type="button" id="theme-toggle" class="icon-button" aria-label="다크 모드" aria-pressed="false" title="다크 모드"><svg class="icon theme-moon" aria-hidden="true"><use href="#icon-moon"/></svg><svg class="icon theme-sun" aria-hidden="true"><use href="#icon-sun"/></svg></button>
+                <button type="button" id="refresh" class="icon-button" aria-label="새로고침" title="새로고침" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg></button>
+                <button type="button" id="admin-login" aria-haspopup="dialog">관리자 로그인</button>
+                <button type="button" id="admin-logout" hidden>로그아웃</button>
+            </div>
         </header>
-        <section id="home" class="page active">
-            <div class="hero">
-                <div><label>● LIVE PROJECT</label>
-                    <h2>졸업 프로젝트<br><strong>해볼까요?</strong></h2>
-                    <p>배가 고파요.</p>
+    <main id="dashboard-content" tabindex="-1">
+        <section id="home" class="page">
+            <div class="overview">
+                <div class="page-heading">
+                    <h1>연구 작업공간</h1>
+                    <p>arXiv 논문과 저자를 탐색하고, 추천 모델의 학습과 평가를 관리합니다.</p>
+                    <button type="button" class="button-primary" data-destination="production"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg>논문 탐색 시작 <svg class="icon button-arrow" aria-hidden="true"><use href="#icon-arrow"/></svg></button>
                 </div>
-                <div class="branch"><small>현재 브랜치</small><b id="hero-branch">—</b><span id="repo-state">확인
-                        중</span><div class="branch-actions"><button id="branches">브랜치 전환</button><button id="pull">GitHub Pull ↓</button></div></div>
+                <article class="branch" aria-labelledby="repository-title">
+                    <div class="branch-heading"><svg class="icon" aria-hidden="true"><use href="#icon-branch"/></svg><h2 id="repository-title">Git 작업 트리</h2></div>
+                    <div class="branch-data"><div><small>현재 브랜치</small><b id="hero-branch">—</b></div><span id="repo-state" class="status-badge">확인 중</span></div>
+                    <div class="branch-actions"><button id="branches">브랜치 전환</button><button id="pull">GitHub Pull</button></div>
+                </article>
             </div>
-            <div class="metrics">
-                <div><small>최근 커밋</small><b id="commit-count">—</b></div>
-                <div><small>활성 브랜치</small><b id="branch-count">—</b></div>
-                <div><small>열린 이슈</small><b id="issue-count">—</b></div>
-                <div><small>작업 상태</small><b class="lime">READY</b></div>
-            </div>
+            <dl class="metrics" aria-label="프로젝트 지표">
+                <div><dt>최근 커밋</dt><dd id="commit-count">—</dd><svg class="icon" aria-hidden="true"><use href="#icon-commit"/></svg></div>
+                <div><dt>활성 브랜치</dt><dd id="branch-count">—</dd><svg class="icon" aria-hidden="true"><use href="#icon-branch"/></svg></div>
+                <div><dt>열린 이슈</dt><dd id="issue-count">—</dd><svg class="icon" aria-hidden="true"><use href="#icon-issue"/></svg></div>
+                <div><dt>미커밋 변경</dt><dd id="change-count">—</dd><svg class="icon" aria-hidden="true"><use href="#icon-status"/></svg></div>
+            </dl>
             <div class="two">
                 <article>
                     <div class="head">
-                        <div><label>DEVELOPMENT</label>
-                            <h3>최근 개발 내역</h3>
-                        </div>
+                        <h2>최근 커밋</h2>
                     </div>
                     <div id="commits">불러오는 중…</div>
                 </article>
                 <article>
                     <div class="head">
-                        <div><label>ISSUE RADAR</label>
-                            <h3>심각도별 이슈</h3>
-                        </div><small id="issue-repo"></small>
+                        <h2>열린 이슈</h2><small id="issue-repo"></small>
                     </div>
                     <div id="filters"></div>
                     <div id="issues">불러오는 중…</div>
@@ -63,18 +102,20 @@
             </div>
             <article class="notes">
                 <div class="head">
-                    <div><label>TEAM NOTES</label>
-                        <h3>팀 메모</h3>
-                    </div>
+                    <h2>팀 메모</h2>
                 </div>
-                <form id="note-form"><input id="author" placeholder="이름" required><textarea id="content"
-                        placeholder="팀원에게 남길 메모…" required></textarea><button>등록</button></form>
+                <form id="note-form">
+                    <label for="author">작성자<input id="author" autocomplete="name" placeholder="이름" required></label>
+                    <label for="content">메모<textarea id="content" rows="1" placeholder="팀원에게 남길 메모…" required></textarea></label>
+                    <button class="button-primary">메모 등록</button>
+                </form>
+                <p id="note-status" role="status"></p>
                 <div id="note-list"></div>
             </article>
         </section>
         <section id="project" class="page">
-            <div class="intro"><label>SYSTEM BLUEPRINT</label>
-                <h2>프로젝트 구조와 문서</h2>
+            <div class="page-heading intro">
+                <h1>프로젝트 구조와 문서</h1>
                 <p>데이터 수집부터 추천 결과까지의 흐름과 연구 문서를 탐색합니다.</p>
             </div>
             <div class="flow">
@@ -85,43 +126,93 @@
             </div>
             <div class="docs">
                 <nav>
-                    <h3>문서</h3>
+                    <h2>문서</h2>
                     <div id="doc-list"></div>
-                    <h3>디렉터리</h3>
+                    <h2>디렉터리</h2>
                     <div id="tree"></div>
                 </nav>
                 <article id="markdown">문서를 선택하세요.</article>
             </div>
             <div class="operations">
                 <article>
-                    <label>SHARED ARTIFACTS</label>
-                    <h3>Output 외부 저장소</h3>
+                    <h2>Output 외부 저장소</h2>
                     <p id="storage-status">저장소 설정을 확인하는 중…</p>
                     <div class="control-row"><button id="storage-pull">외부 → Output</button><button id="storage-push">Output → 외부</button></div>
                 </article>
             </div>
         </section>
+        <section id="data-structure" class="page">
+            <div class="page-heading">
+                <h1>데이터 구조</h1>
+                <p>논문 탐색에 쓰이는 표본의 규모와 저자·인용·주제 관계를 확인합니다.</p>
+            </div>
+            <article class="paper-schema" aria-labelledby="paper-schema-title">
+                <h2 id="paper-schema-title">논문 데이터 관계도</h2>
+                <div class="paper-schema-status">
+                    <p id="paper-schema-status" role="status">논문 데이터 집계를 불러오는 중…</p>
+                    <button id="paper-schema-retry" type="button" hidden>다시 불러오기</button>
+                </div>
+                <div class="paper-schema-source">
+                    <h3>OGBN-Arxiv 원본</h3>
+                    <p id="paper-schema-source-counts" hidden></p>
+                </div>
+                <div class="paper-schema-selection">표본 추출 <span aria-hidden="true">↓</span></div>
+                <div class="paper-schema-core">
+                    <h3>검색 대상 논문</h3>
+                    <p class="paper-schema-total" id="paper-schema-total" hidden></p>
+                    <p>논문 ID · 제목 · 초록</p>
+                </div>
+                <ul class="paper-schema-relations" aria-label="논문의 관계 유형">
+                    <li>
+                        <span class="paper-schema-edge">저자 → 논문</span>
+                        <h3>저술</h3>
+                        <p class="paper-schema-count" id="paper-schema-authors" hidden></p>
+                        <p>OpenAlex 저자를 논문에 연결</p>
+                    </li>
+                    <li>
+                        <span class="paper-schema-edge">논문 → 논문</span>
+                        <h3>인용</h3>
+                        <p class="paper-schema-count" id="paper-schema-citations" hidden></p>
+                        <p>표본 내 인용 논문과 피인용 논문을 연결</p>
+                    </li>
+                    <li>
+                        <span class="paper-schema-edge">논문 → 주제</span>
+                        <h3>주제 분류</h3>
+                        <p class="paper-schema-count" id="paper-schema-topics" hidden></p>
+                        <p>arXiv 분야에 연결</p>
+                        <p class="paper-schema-dtm">연구 분야·과제·방법(DTM)<span id="paper-schema-dtm-count"></span></p>
+                    </li>
+                </ul>
+            </article>
+            <details class="paper-distribution" id="paper-distribution" hidden>
+                <summary>분야별 논문 분포 <span id="paper-distribution-total"></span></summary>
+                <ul id="paper-distribution-chart" aria-label="분야별 논문 수, 많은 순"></ul>
+            </details>
+        </section>
         <section id="scripts" class="page">
-            <div class="intro"><label>LIVE SCRIPT RUNNER</label>
-                <h2>컨테이너 코드 실행</h2>
+            <div class="page-heading intro">
+                <h1>스크립트 실행</h1>
                 <p>현재 작업 트리의 Python 스크립트를 선택해 컨테이너 안에서 실행하고 로그를 실시간으로 확인합니다.</p>
             </div>
             <article class="console-wrap script-runner">
-                <div class="control-row"><select id="script-select"></select><button id="run-script">실행 ▶</button><button id="stop-script" class="stop-button" disabled>중지 ■</button></div>
+                <label for="script-select">Python 스크립트</label>
+                <div class="control-row"><select id="script-select"></select><button id="run-script" class="button-primary">스크립트 실행</button><button id="stop-script" class="stop-button" disabled>중지</button></div>
                 <div class="head"><small id="script-status">스크립트를 불러오는 중…</small><em id="script-job-status">대기 중</em></div>
-                <pre id="script-log">$ 실행할 파일을 선택하세요.</pre>
+                <pre id="script-log" tabindex="0" aria-label="스크립트 실행 로그">$ 실행할 파일을 선택하세요.</pre>
             </article>
         </section>
         <section id="learn" class="page task">
-            <div class="task-hero purple"><label>MODEL LAB / TRAIN</label>
-                <h2>지식 그래프 모델 학습</h2>
+            <div class="page-heading">
+                <h1>지식 그래프 모델 학습</h1>
                 <p>Domain · Task · Method 지식과 인용 그래프를 결합해 LightGCN을 학습합니다.</p>
-                <div class="task-actions"><select data-task-version="train"></select><button data-task="train">로컬 GPU 학습 ▶</button><button data-stop-task="train" class="stop-button" disabled>중지 ■</button><a class="colab-button"
+            </div>
+            <div class="task-controls"><label for="train-variant">실행 구성</label>
+                <div class="task-actions"><select id="train-variant" data-task-version="train"></select><button data-task="train" class="button-primary">로컬 GPU 학습</button><button data-stop-task="train" class="stop-button" disabled>중지</button><a class="colab-button"
                         data-colab href="#">Colab에서 실행 ↗</a></div>
             </div>
             <div class="two">
-                <article><label>EXECUTION PLAN</label>
-                    <h3>학습 파이프라인</h3>
+                <article>
+                    <h2>학습 파이프라인</h2>
                     <ol>
                         <li>데이터와 지식 메타 로드</li>
                         <li>Train · Validation · Test 분할</li>
@@ -131,57 +222,152 @@
                 </article>
                 <article class="console-wrap">
                     <div class="head">
-                        <h3>실행 로그</h3><em>대기 중</em>
+                        <h2>실행 로그</h2><em>대기 중</em>
                     </div>
-                    <pre>$ 학습 시작 버튼을 누르세요.</pre>
+                    <pre tabindex="0" aria-label="학습 실행 로그">$ 학습 시작 버튼을 누르세요.</pre>
                 </article>
             </div>
         </section>
         <section id="benchmark" class="page task">
-            <div class="task-hero cyan"><label>MODEL LAB / EVALUATE</label>
-                <h2>Zero-Leakage 벤치마크</h2>
+            <div class="page-heading">
+                <h1>Zero-Leakage 벤치마크</h1>
                 <p>다섯 모델의 일반 추천 및 신규 논문 추천 성능을 공정하게 비교합니다.</p>
-                <div class="task-actions"><select data-task-version="benchmark"></select><button data-task="benchmark">로컬 GPU 벤치마크 ▶</button><button data-stop-task="benchmark" class="stop-button" disabled>중지 ■</button><a class="colab-button"
+            </div>
+            <div class="task-controls"><label for="benchmark-variant">실행 구성</label>
+                <div class="task-actions"><select id="benchmark-variant" data-task-version="benchmark"></select><button data-task="benchmark" class="button-primary">로컬 GPU 평가</button><button data-stop-task="benchmark" class="stop-button" disabled>중지</button><a class="colab-button"
                         data-colab href="#">Colab에서 실행 ↗</a></div>
             </div>
-            <div class="models"><span>BPR-MF</span><span>GCN +
-                    BPR</span><span>GraphSAGE</span><span>LightGCN</span><span>Ours + Knowledge</span></div>
+            <ul class="models" aria-label="비교 모델"><li>BPR-MF</li><li>GCN + BPR</li><li>GraphSAGE</li><li>LightGCN</li><li>Ours + Knowledge</li></ul>
             <article class="console-wrap">
                 <div class="head">
-                    <h3>벤치마크 로그</h3><em>대기 중</em>
+                    <h2>벤치마크 로그</h2><em>대기 중</em>
                 </div>
-                <pre>$ 벤치마크 시작 버튼을 누르세요.</pre>
+                <pre tabindex="0" aria-label="벤치마크 실행 로그">$ 벤치마크 시작 버튼을 누르세요.</pre>
             </article>
         </section>
-        <section id="production" class="page">
-            <div class="rec-heading"><div><label>RESEARCH COMPANION</label><h2>질문에서 시작하는 논문 탐색</h2><p>찾고 싶은 연구와 필요한 조건을 알려주세요. 관련 논문과 저자를 함께 찾습니다.</p></div><span class="rec-demo">실제 코퍼스 검색</span></div>
-            <form id="live-rec-form" class="live-rec-search"><label for="live-rec-query">어떤 연구를 찾고 계신가요?</label><textarea id="live-rec-query" rows="3" maxlength="2000" placeholder="예: FPGA 신경망 추론에서 전력 소모와 처리량을 측정한 논문. 서베이는 제외해줘." required></textarea><div><span>한국어 분야 용어와 영어 질문을 지원합니다.</span><button type="submit" id="live-rec-submit">논문·저자 찾기 →</button></div></form>
-            <div class="live-rec-examples" aria-label="예시 질문"><button type="button" data-rec-example="클릭이나 구매 같은 암묵적 피드백으로 개인화된 추천 순위를 학습하는 방법을 찾아줘.">클릭·구매 기반 추천</button><button type="button" data-rec-example="FPGA 신경망 추론에서 전력 소모와 처리량을 측정한 구현 논문. 서베이는 제외해줘.">FPGA 추론 가속</button><button type="button" data-rec-example="비볼록 목적함수에 대한 확률적 경사 하강법의 수렴을 증명한 연구를 찾아줘.">비볼록 SGD 수렴</button></div>
-            <p id="live-rec-status" role="status" aria-live="polite">질문을 입력하면 실제 논문 목록을 검색합니다.</p>
-            <div id="live-rec-plan" class="live-rec-plan" hidden></div>
-            <div id="live-rec-paper-heading" class="rec-section-title" hidden>
-                <h3 id="live-rec-papers-title">추천 논문</h3>
-                <button type="button" id="live-rec-author-jump" class="live-rec-jump" hidden>추천 저자 보기 ↓</button>
+        <section id="production" class="page active">
+            <div class="rec-heading page-heading">
+                <div><h1>논문 탐색</h1><p>연구 질문으로 arXiv 논문과 저자를 찾고, 초록과 추천 근거를 비교합니다.</p></div>
+                <button type="button" id="live-rec-reset" disabled>+ 새 탐색</button>
             </div>
-            <div id="live-rec-results" class="rec-paper-grid" aria-labelledby="live-rec-papers-title"></div>
-            <section id="live-rec-authors" aria-labelledby="live-rec-authors-title" hidden>
-                <div class="rec-section-title"><h3 id="live-rec-authors-title" tabindex="-1">추천 저자</h3></div>
-                <p class="live-rec-muted">상위 10개 논문 후보에 많이 등장한 저자부터 보여줍니다.</p>
-                <div id="live-rec-author-results" class="rec-author-grid"></div>
-            </section>
-            <p class="rec-footnote">추천은 탐색을 돕는 후보입니다. 주제·조건의 근거가 부족하면 확인 필요로 표시합니다. 한국어 의미 검색을 지원하며, 조건 해석에는 분야 용어 사전을 함께 사용합니다. 이전 대화 조건은 자동 누적되지 않습니다.</p>
+            <div class="rec-chat">
+                <div class="rec-prism" aria-hidden="true">
+                    <span class="rec-prism-light rec-prism-blue"></span>
+                    <span class="rec-prism-light rec-prism-cyan"></span>
+                    <span class="rec-prism-light rec-prism-gold"></span>
+                </div>
+                <div id="live-rec-history" class="rec-history" role="region" aria-label="논문 탐색 대화 기록" tabindex="0">
+                    <div id="live-rec-welcome" class="rec-assistant">
+                        <span class="rec-ai-mark" aria-hidden="true"><svg class="icon"><use href="#icon-search"/></svg></span>
+                        <div class="rec-answer">
+                            <h2 class="rec-speaker">어떤 연구를 찾고 있나요?</h2>
+                            <p>연구 주제, 문제 또는 방법을 입력하세요. 첫 검색 후 대화로 조건을 추가할 수 있습니다.</p>
+                        </div>
+                    </div>
+                </div>
+                <p id="live-rec-announcement" class="rec-sr-only" role="status"></p>
+                <div class="rec-chat-controls">
+                    <div id="live-rec-filters" class="rec-tags live-rec-filters" aria-label="적용 중인 후속 조건" hidden></div>
+                    <div id="live-rec-examples" class="live-rec-examples" aria-label="예시 질문">
+                        <button type="button" data-rec-example="클릭이나 구매 같은 암묵적 피드백으로 개인화된 추천 순위를 학습하는 방법을 찾아줘.">클릭·구매 기반 추천</button>
+                        <button type="button" data-rec-example="FPGA 신경망 추론 구현 논문을 찾아줘.">FPGA 추론 가속</button>
+                        <button type="button" data-rec-example="비볼록 목적함수에 대한 확률적 경사 하강법의 수렴을 증명한 연구를 찾아줘.">비볼록 SGD 수렴</button>
+                    </div>
+                    <div id="live-rec-followups" class="live-rec-examples" aria-label="후속 질문 예시" hidden>
+                        <button type="button" data-rec-example="기존 논문을 정리하는 데 그치지 않고 직접 구현하고 실험한 연구 위주로 좁혀줘.">직접 구현한 연구</button>
+                        <button type="button" data-rec-example="실험에서 쓴 전력이 5와트를 넘지 않는 연구 위주로 남겨줄 수 있어?">소비 전력 5W 이하</button>
+                    </div>
+                    <form id="live-rec-form" class="live-rec-search">
+                        <label for="live-rec-query" id="live-rec-query-label">첫 질문</label>
+                        <div class="rec-composer">
+                            <textarea id="live-rec-query" rows="2" maxlength="2000" placeholder="예: FPGA 신경망 추론 구현 논문을 찾아줘." required></textarea>
+                            <button type="submit" id="live-rec-submit" class="button-primary">검색 시작</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
         </section>
     </main>
-    <div id="toast"></div>
-    <dialog id="modal"><button id="close">×</button><label>GIT REFERENCES</label>
-        <h2>브랜치</h2>
+    </div>
+    <div id="toast" role="status"></div>
+    <dialog id="modal" aria-labelledby="branch-dialog-title"><button id="close" class="icon-button" aria-label="닫기">×</button>
+        <h2 id="branch-dialog-title">브랜치 관리</h2>
         <p>브랜치를 선택하면 해당 개발 내역을 확인하고 작업 브랜치를 변경할 수 있습니다.</p>
         <div id="branch-list"></div>
         <h3 id="branch-history-title">개발 내역</h3>
         <div id="branch-history"></div>
     </dialog>
-    <script src="/app.js?v=20261117-1"></script>
-    <script src="/live-recommendation.js?v=20261122-1"></script>
+    <dialog id="admin-dialog" aria-labelledby="admin-dialog-title">
+        <h2 id="admin-dialog-title">관리자 로그인</h2>
+        <form id="admin-form" method="post" action="/api/auth/login">
+            <label for="admin-username">아이디</label>
+            <input id="admin-username" name="username" autocomplete="username" value="admin" required>
+            <label for="admin-password">비밀번호</label>
+            <input id="admin-password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+            <p id="admin-error" role="alert" hidden></p>
+            <div class="admin-form-actions">
+                <button type="button" id="admin-cancel">취소</button>
+                <button type="submit" class="button-primary">로그인</button>
+            </div>
+        </form>
+    </dialog>
+    <script id="paper-dataset-snapshot" type="application/json">
+        {
+          "asOf": "2026-11-17",
+          "papers": 16000,
+          "citationEdges": 45167,
+          "authorEdges": 46170,
+          "dtmSuccess": 15999,
+          "source": {
+            "papers": 169343,
+            "citationEdges": 1166243
+          },
+          "categories": [
+            {"id":0,"code":"cs.NA","papers":419},
+            {"id":1,"code":"cs.MM","papers":419},
+            {"id":2,"code":"cs.LO","papers":419},
+            {"id":3,"code":"cs.CY","papers":419},
+            {"id":4,"code":"cs.CR","papers":419},
+            {"id":5,"code":"cs.DC","papers":419},
+            {"id":6,"code":"cs.HC","papers":419},
+            {"id":7,"code":"cs.CE","papers":419},
+            {"id":8,"code":"cs.NI","papers":419},
+            {"id":9,"code":"cs.CC","papers":418},
+            {"id":10,"code":"cs.AI","papers":418},
+            {"id":11,"code":"cs.MA","papers":418},
+            {"id":13,"code":"cs.NE","papers":418},
+            {"id":14,"code":"cs.SC","papers":418},
+            {"id":16,"code":"cs.CV","papers":418},
+            {"id":17,"code":"cs.GR","papers":418},
+            {"id":18,"code":"cs.ET","papers":418},
+            {"id":19,"code":"cs.SY","papers":418},
+            {"id":20,"code":"cs.CG","papers":418},
+            {"id":22,"code":"cs.PL","papers":418},
+            {"id":23,"code":"cs.SE","papers":418},
+            {"id":24,"code":"cs.LG","papers":418},
+            {"id":25,"code":"cs.SD","papers":418},
+            {"id":26,"code":"cs.SI","papers":418},
+            {"id":27,"code":"cs.RO","papers":418},
+            {"id":28,"code":"cs.IT","papers":418},
+            {"id":30,"code":"cs.CL","papers":418},
+            {"id":31,"code":"cs.IR","papers":418},
+            {"id":33,"code":"cs.FL","papers":418},
+            {"id":34,"code":"cs.DS","papers":418},
+            {"id":36,"code":"cs.GT","papers":418},
+            {"id":37,"code":"cs.DB","papers":418},
+            {"id":38,"code":"cs.DL","papers":418},
+            {"id":39,"code":"cs.DM","papers":418},
+            {"id":29,"code":"cs.PF","papers":416},
+            {"id":32,"code":"cs.MS","papers":411},
+            {"id":15,"code":"cs.AR","papers":403},
+            {"id":21,"code":"cs.OH","papers":393},
+            {"id":35,"code":"cs.OS","papers":127},
+            {"id":12,"code":"cs.GL","papers":29}
+          ]
+        }
+    </script>
+    <script src="/app.js?v=20261123-5"></script>
+    <script src="/live-recommendation.js?v=20261123-9"></script>
 </body>
 
 </html>
